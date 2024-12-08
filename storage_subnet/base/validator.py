@@ -18,23 +18,23 @@
 # DEALINGS IN THE SOFTWARE.
 
 
-import copy
-import numpy as np
-import asyncio
 import argparse
+import asyncio
+import copy
 import threading
-import bittensor as bt
-
-from typing import List, Union
 from traceback import print_exception
+from typing import List, Union
 
-from template.base.neuron import BaseNeuron
-from template.base.utils.weight_utils import (
-    process_weights_for_netuid,
+import bittensor as bt
+import numpy as np
+
+from storage_subnet.base.neuron import BaseNeuron
+from storage_subnet.base.utils.weight_utils import (
     convert_weights_and_uids_for_emit,
+    process_weights_for_netuid,
 )  # TODO: Replace when bittensor switches to numpy
-from template.mock import MockDendrite
-from template.utils.config import add_validator_args
+from storage_subnet.mock import MockDendrite
+from storage_subnet.utils.config import add_validator_args
 
 
 class BaseValidatorNeuron(BaseNeuron):
@@ -104,15 +104,12 @@ class BaseValidatorNeuron(BaseNeuron):
                 pass
 
         except Exception as e:
-            bt.logging.error(
-                f"Failed to create Axon initialize with exception: {e}"
-            )
+            bt.logging.error(f"Failed to create Axon initialize with exception: {e}")
             pass
 
     async def concurrent_forward(self):
         coroutines = [
-            self.forward()
-            for _ in range(self.config.neuron.num_concurrent_forwards)
+            self.forward() for _ in range(self.config.neuron.num_concurrent_forwards)
         ]
         await asyncio.gather(*coroutines)
 
@@ -167,9 +164,7 @@ class BaseValidatorNeuron(BaseNeuron):
         # In case of unforeseen errors, the validator will log the error and continue operations.
         except Exception as err:
             bt.logging.error(f"Error during validation: {str(err)}")
-            bt.logging.debug(
-                str(print_exception(type(err), err, err.__traceback__))
-            )
+            bt.logging.debug(str(print_exception(type(err), err, err.__traceback__)))
 
     def run_in_background_thread(self):
         """
@@ -227,7 +222,7 @@ class BaseValidatorNeuron(BaseNeuron):
         # Check if self.scores contains any NaN values and log a warning if it does.
         if np.isnan(self.scores).any():
             bt.logging.warning(
-                f"Scores contain NaN values. This may be due to a lack of responses from miners, or a bug in your reward functions."
+                "Scores contain NaN values. This may be due to a lack of responses from miners, or a bug in your reward functions."
             )
 
         # Calculate the average reward for each uid across non-zero values.
@@ -359,9 +354,7 @@ class BaseValidatorNeuron(BaseNeuron):
         # Update scores with rewards produced by this step.
         # shape: [ metagraph.n ]
         alpha: float = self.config.neuron.moving_average_alpha
-        self.scores: np.ndarray = (
-            alpha * scattered_rewards + (1 - alpha) * self.scores
-        )
+        self.scores: np.ndarray = alpha * scattered_rewards + (1 - alpha) * self.scores
         bt.logging.debug(f"Updated moving avg scores: {self.scores}")
 
     def save_state(self):

@@ -1,5 +1,12 @@
 <div align="center">
 
+
+```sh
+# Initialise repo
+uv venv --python 3.12
+uv sync
+```
+
 # **Bittensor Subnet Template** <!-- omit in toc -->
 [![Discord Chat](https://img.shields.io/discord/308323056592486420.svg)](https://discord.gg/bittensor)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) 
@@ -13,14 +20,14 @@
 
 ---
 - [Quickstarter template](#quickstarter-template)
+- [In order to simplify the building of subnets, this template abstracts away the complexity of the underlying blockchain and other boilerplate code. While the default behavior of the template is sufficient for a simple subnet, you should customize the template in order to meet your specific requirements.](#in-order-to-simplify-the-building-of-subnets-this-template-abstracts-away-the-complexity-of-the-underlying-blockchain-and-other-boilerplate-code-while-the-default-behavior-of-the-template-is-sufficient-for-a-simple-subnet-you-should-customize-the-template-in-order-to-meet-your-specific-requirements)
 - [Introduction](#introduction)
   - [Example](#example)
 - [Installation](#installation)
   - [Before you proceed](#before-you-proceed)
   - [Install](#install)
 - [Writing your own incentive mechanism](#writing-your-own-incentive-mechanism)
-- [Writing your own subnet API](#writing-your-own-subnet-api)
-- [Subnet Links](#subnet-links)
+- [The `template` directory should also be renamed to your project name.](#the-template-directory-should-also-be-renamed-to-your-project-name)
 - [License](#license)
 
 ---

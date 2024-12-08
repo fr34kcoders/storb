@@ -1,0 +1,46 @@
+[project]
+name = "storage_subnet"
+version = "0.1.0"
+description = "A storage subnet on Bittensor"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "bittensor==8.4.5",
+    "numpy==2.0.2",
+    "pydantic>=2.10.3",
+    "pytest>=8.3.4",
+    "rich>=13.9.4",
+    "starlette==0.37.2",
+]
+
+[dependency-groups]
+dev = ["ruff>=0.8.2"]
+
+[tool.ruff]
+exclude = [
+    ".git",
+    ".pyenv",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    "venv",
+]
+indent-width = 4
+
+[tool.ruff.lint]
+fixable = ["ALL"]
+ignore = ["E501"]
+select = ["F", "E", "W", "N", "I", "A", "PLC", "PLE", "PLW"]
+
+[tool.ruff.format]
+indent-style = "space"
+line-ending = "lf"
+quote-style = "double"

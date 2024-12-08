@@ -20,13 +20,13 @@ import sys
 import unittest
 
 import bittensor as bt
-import torch
+import numpy as np
 
 from neurons.validator import Validator
-from template.base.validator import BaseValidatorNeuron
-from template.protocol import Dummy
-from template.utils.uids import get_random_uids
-from template.validator.reward import get_rewards
+from storage_subnet.base.validator import BaseValidatorNeuron
+from storage_subnet.protocol import Dummy
+from storage_subnet.utils.uids import get_random_uids
+from storage_subnet.validator.reward import get_rewards
 
 
 class TemplateValidatorNeuronTestCase(unittest.TestCase):
@@ -64,9 +64,7 @@ class TemplateValidatorNeuronTestCase(unittest.TestCase):
 
         responses = self.neuron.dendrite.query(
             # Send the query to miners in the network.
-            axons=[
-                self.neuron.metagraph.axons[uid] for uid in self.miner_uids
-            ],
+            axons=[self.neuron.metagraph.axons[uid] for uid in self.miner_uids],
             # Construct a dummy query.
             synapse=Dummy(dummy_input=self.neuron.step),
             # All responses have the deserialize function called on them before returning.
@@ -88,7 +86,7 @@ class TemplateValidatorNeuronTestCase(unittest.TestCase):
         )
 
         rewards = get_rewards(self.neuron, responses)
-        expected_rewards = torch.FloatTensor([1.0] * len(responses))
+        expected_rewards = np.ones(len(responses), dtype=np.float32)
         self.assertEqual(rewards, expected_rewards)
 
     def test_reward_with_nan(self):

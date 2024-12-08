@@ -18,6 +18,7 @@
 # DEALINGS IN THE SOFTWARE.
 
 import typing
+
 import bittensor as bt
 
 # TODO(developer): Rewrite with your protocol definition.

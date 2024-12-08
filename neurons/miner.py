@@ -1,7 +1,7 @@
 # The MIT License (MIT)
-# Copyright © 2023 Yuma Rao
+# Copyright (c) 2023 Yuma Rao
 # TODO(developer): Set your name
-# Copyright © 2023 <your name>
+# Copyright (c) 2023 <your name>
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the “Software”), to deal in the Software without restriction, including without limitation
@@ -19,13 +19,14 @@
 
 import time
 import typing
+
 import bittensor as bt
 
 # Bittensor Miner Template:
-import template
+import storage_subnet
 
 # import base miner class which takes care of most of the boilerplate
-from template.base.miner import BaseMinerNeuron
+from storage_subnet.base.miner import BaseMinerNeuron
 
 
 class Miner(BaseMinerNeuron):
@@ -43,8 +44,8 @@ class Miner(BaseMinerNeuron):
         # TODO(developer): Anything specific to your use case you can do here
 
     async def forward(
-        self, synapse: template.protocol.Dummy
-    ) -> template.protocol.Dummy:
+        self, synapse: storage_subnet.protocol.Dummy
+    ) -> storage_subnet.protocol.Dummy:
         """
         Processes the incoming 'Dummy' synapse by performing a predefined operation on the input data.
         This method should be replaced with actual logic relevant to the miner's purpose.
@@ -63,7 +64,7 @@ class Miner(BaseMinerNeuron):
         return synapse
 
     async def blacklist(
-        self, synapse: template.protocol.Dummy
+        self, synapse: storage_subnet.protocol.Dummy
     ) -> typing.Tuple[bool, str]:
         """
         Determines whether an incoming request should be blacklisted and thus ignored. Your implementation should
@@ -96,9 +97,7 @@ class Miner(BaseMinerNeuron):
         """
 
         if synapse.dendrite is None or synapse.dendrite.hotkey is None:
-            bt.logging.warning(
-                "Received a request without a dendrite or hotkey."
-            )
+            bt.logging.warning("Received a request without a dendrite or hotkey.")
             return True, "Missing dendrite or hotkey"
 
         # TODO(developer): Define how miners should blacklist requests.
@@ -126,7 +125,7 @@ class Miner(BaseMinerNeuron):
         )
         return False, "Hotkey recognized!"
 
-    async def priority(self, synapse: template.protocol.Dummy) -> float:
+    async def priority(self, synapse: storage_subnet.protocol.Dummy) -> float:
         """
         The priority function determines the order in which requests are handled. More valuable or higher-priority
         requests are processed before others. You should design your own priority mechanism with care.
@@ -147,9 +146,7 @@ class Miner(BaseMinerNeuron):
         - A higher stake results in a higher priority value.
         """
         if synapse.dendrite is None or synapse.dendrite.hotkey is None:
-            bt.logging.warning(
-                "Received a request without a dendrite or hotkey."
-            )
+            bt.logging.warning("Received a request without a dendrite or hotkey.")
             return 0.0
 
         # TODO(developer): Define how miners should prioritize requests.

@@ -16,18 +16,18 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+import argparse
 import os
 import subprocess
-import argparse
+
 import bittensor as bt
+
 from .logging import setup_events_logger
 
 
 def is_cuda_available():
     try:
-        output = subprocess.check_output(
-            ["nvidia-smi", "-L"], stderr=subprocess.STDOUT
-        )
+        output = subprocess.check_output(["nvidia-smi", "-L"], stderr=subprocess.STDOUT)
         if "NVIDIA" in output.decode("utf-8"):
             return "cuda"
     except Exception:

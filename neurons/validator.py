@@ -20,14 +20,13 @@
 
 import time
 
-# Bittensor
 import bittensor as bt
 
 # import base validator class which takes care of most of the boilerplate
-from template.base.validator import BaseValidatorNeuron
+from storage_subnet.base.validator import BaseValidatorNeuron
 
 # Bittensor Validator Template:
-from template.validator import forward
+from storage_subnet.validator import forward
 
 
 class Validator(BaseValidatorNeuron):

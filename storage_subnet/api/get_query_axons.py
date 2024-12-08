@@ -16,9 +16,10 @@
 # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
-import numpy as np
 import random
+
 import bittensor as bt
+import numpy as np
 
 
 async def ping_uids(dendrite, metagraph, uids, timeout=3):
@@ -76,17 +77,11 @@ async def get_query_api_nodes(dendrite, metagraph, n=0.1, timeout=3):
     Returns:
         list: A list of UIDs representing the available API nodes.
     """
-    bt.logging.debug(
-        f"Fetching available API nodes for subnet {metagraph.netuid}"
-    )
+    bt.logging.debug(f"Fetching available API nodes for subnet {metagraph.netuid}")
     vtrust_uids = [
-        uid.item()
-        for uid in metagraph.uids
-        if metagraph.validator_trust[uid] > 0
+        uid.item() for uid in metagraph.uids if metagraph.validator_trust[uid] > 0
     ]
-    top_uids = np.where(metagraph.S > np.quantile(metagraph.S, 1 - n))[
-        0
-    ].tolist()
+    top_uids = np.where(metagraph.S > np.quantile(metagraph.S, 1 - n))[0].tolist()
     init_query_uids = set(top_uids).intersection(set(vtrust_uids))
     query_uids, _ = await ping_uids(
         dendrite, metagraph, list(init_query_uids), timeout=timeout
@@ -99,9 +94,7 @@ async def get_query_api_nodes(dendrite, metagraph, n=0.1, timeout=3):
     return query_uids
 
 
-async def get_query_api_axons(
-    wallet, metagraph=None, n=0.1, timeout=3, uids=None
-):
+async def get_query_api_axons(wallet, metagraph=None, n=0.1, timeout=3, uids=None):
     """
     Retrieves the axons of query API nodes based on their availability and stake.
 
