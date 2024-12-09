@@ -1,6 +1,11 @@
 import math
 
-from storage_subnet.constants import MAX_PIECE_SIZE, MIN_PIECE_SIZE
+from storage_subnet.constants import (
+    MAX_PIECE_SIZE,
+    MIN_PIECE_SIZE,
+    PIECE_LENGTH_OFFSET,
+    PIECE_LENGTH_SCALING,
+)
 
 
 def piece_length(
@@ -16,33 +21,12 @@ def piece_length(
     Returns:
         int: The calculated piece size within the specified bounds.
     """
-    exponent = int((math.log2(content_length) * 0.5) + 4)
+    exponent = int(
+        (math.log2(content_length) * PIECE_LENGTH_SCALING) + PIECE_LENGTH_OFFSET
+    )
     length = 1 << exponent
     if length < min_size:
         return min_size
     elif length > max_size:
         return max_size
     return length
-
-
-def split_content(file_path: str) -> list[bytes]:
-    """Split the content of a file into smaller pieces.
-
-    Args:
-        file_path (str): The path to the file to be split.
-
-    Returns:
-        list[bytes]: A list of byte chunks representing the file pieces.
-    """
-    with open(file_path, "rb") as file:
-        file.seek(0, 2)  # Move to the end of the file
-        content_length = file.tell()
-        piece_size = piece_length(content_length)
-        file.seek(0)  # Reset to the beginning of the file
-
-        pieces = []
-        chunk = file.read(piece_size)
-        while chunk:
-            pieces.append(chunk)
-            chunk = file.read(piece_size)
-    return pieces

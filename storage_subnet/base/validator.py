@@ -144,7 +144,15 @@ class BaseValidatorNeuron(BaseNeuron):
                 bt.logging.info(f"step({self.step}) block({self.block})")
 
                 # Run multiple forwards concurrently.
-                self.loop.run_until_complete(self.concurrent_forward())
+                # self.loop.run_until_complete(self.concurrent_forward())
+                if self.config.organic:
+                    bt.logging.debug("organic run")
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.concurrent_forward(), self.loop
+                    )
+                    future.result()  # Wait for the coroutine to complete
+                else:
+                    self.loop.run_until_complete(self.concurrent_forward())
 
                 # Check if we should exit.
                 if self.should_exit:
