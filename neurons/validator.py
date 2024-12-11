@@ -30,7 +30,6 @@ from storage_subnet.constants import MAX_UPLOAD_SIZE
 from storage_subnet.utils.piece import piece_length
 from storage_subnet.validator import forward
 
-
 # Define the Validator class
 class Validator(BaseValidatorNeuron):
     """
@@ -66,6 +65,18 @@ core_validator = None
 # API setup
 app = FastAPI(debug=False)
 
+# logging middleware
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    # pretty colors for logging
+    reset = "\033[0m"
+    green = "\033[32m"
+    blue = "\033[34m"
+    bold = "\033[1m"
+
+    bt.logging.debug(f"{bold}{green}Request{reset}: {bold}{blue}{request.method}{reset} {request.url}")
+    response = await call_next(request)
+    return response
 
 @app.middleware("http")
 async def check_file_size(request: Request, call_next):
