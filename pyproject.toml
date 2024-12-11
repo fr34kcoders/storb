@@ -3,7 +3,7 @@ name = "storage_subnet"
 version = "0.0.1"
 description = "A storage subnet on Bittensor"
 readme = "README.md"
-license = "MIT"
+license = { file = "LICENSE" }
 requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -13,12 +13,16 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
+    "aiofiles>=24.1.0",
     "bittensor==8.4.5",
+    "fastapi>=0.110.3",
     "numpy==2.0.2",
     "pydantic>=2.10.3",
     "pytest>=8.3.4",
+    "python-multipart>=0.0.19",
     "rich>=13.9.4",
     "starlette==0.37.2",
+    "uvicorn>=0.32.1",
 ]
 
 [dependency-groups]
@@ -44,3 +48,9 @@ select = ["F", "E", "W", "N", "I", "A", "PLC", "PLE", "PLW"]
 indent-style = "space"
 line-ending = "lf"
 quote-style = "double"
+
+[tool.setuptools]
+packages = ["storage_subnet"]
+
+[tool.setuptools.package-dir]
+storage_subnet = "storage_subnet"
