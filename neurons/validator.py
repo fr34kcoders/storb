@@ -18,7 +18,7 @@
 
 import asyncio
 import time
-from io import BytesIO
+from datetime import datetime
 
 import bittensor as bt
 import uvicorn
@@ -26,8 +26,10 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 
 # import base validator class which takes care of most of the boilerplate
 from storage_subnet.base.validator import BaseValidatorNeuron
-from storage_subnet.constants import LogColor, MAX_UPLOAD_SIZE
-from storage_subnet.utils.piece import piece_length
+from storage_subnet.constants import MAX_UPLOAD_SIZE, LogColor
+from storage_subnet.protocol import StoreResponse
+from storage_subnet.utils.infohash import generate_infohash
+from storage_subnet.utils.piece import piece_hash, piece_length, split_file
 from storage_subnet.validator import forward
 
 
@@ -95,23 +97,34 @@ async def vali() -> str:
     return "Henlo!"
 
 
-@app.post("/store/")
-async def upload_file(file: UploadFile):
-    buffer = BytesIO()
+@app.post("/store/", response_model=StoreResponse)
+async def upload_file(file: UploadFile) -> StoreResponse:
     bt.logging.trace(f"content size: {file.size}")
     piece_size = piece_length(file.size)
-    i = 0
-    while content := await file.read(piece_size):
-        buffer.write(content)
+    filename = file.filename
+    filesize = file.size
+
+    piece_hashes = []
+
+    for idx, piece in enumerate(split_file(file, piece_size)):
+        _, data = piece
+        p_hash = piece_hash(data)
+        piece_hashes.append(p_hash)
+        timestamp = str(datetime.utcnow().timestamp())
+
         bt.logging.trace(
-            f"piece{i} | piece size: {piece_size} bytes | preview: {buffer.getvalue()[:10]}"
+            f"piece{idx} | piece size: {piece_size} bytes | hash: {p_hash}"
         )
         # TODO: upload to miner(s) logic
         # clear buffer after uploading :)
-        buffer.seek(0)
-        buffer.truncate(0)
-        i += 1
-    return {"message": "File uploaded!", "filename": file.filename}
+
+    infohash, _ = generate_infohash(
+        filename, timestamp, piece_size, filesize, piece_hashes
+    )
+
+    bt.logging.debug(f"Uploaded file with infohash: {infohash}")
+
+    return StoreResponse(infohash=infohash)
 
 
 # Async main loop for the validator

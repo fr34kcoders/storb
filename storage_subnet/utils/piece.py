@@ -2,7 +2,9 @@ import hashlib
 import math
 from typing import Generator
 
+import bittensor as bt
 import reedsolo
+from fastapi import UploadFile
 
 from storage_subnet.constants import (
     MAX_PIECE_SIZE,
@@ -51,7 +53,7 @@ def piece_hash(data: bytes) -> str:
 
 
 def split_file(
-    file_path: str,
+    file: UploadFile,
     piece_size: int,
     rs_data_pieces: int = RS_DATA_SIZE,
     rs_parity_pieces: int = RS_PARITY_SIZE,
@@ -60,7 +62,7 @@ def split_file(
     Stream data and parity pieces as they are generated.
 
     Args:
-        file_path (str): Path to the input file.
+        file (UploadFile): The input file to process.
         piece_size (int): Size of each data piece (in bytes).
 
     Yields:
@@ -69,37 +71,34 @@ def split_file(
     """
     rs = reedsolo.RSCodec(rs_parity_pieces)
 
-    # Open the file for reading
-    with open(file_path, "rb") as f:
-        # Initialize buffers for parity pieces
-        parity_buffers = [bytearray(piece_size) for _ in range(rs_parity_pieces)]
+    # Initialize buffers for parity pieces
+    parity_buffers = [bytearray(piece_size) for _ in range(rs_parity_pieces)]
 
-        # Process the file in chunks
-        while True:
-            # Read one "row" of bytes across all data pieces
-            data_pieces = []
-            for _ in range(rs_data_pieces):
-                chunk = f.read(piece_size)
-                if not chunk:
-                    break  # End of file
-                # Pad chunk if it's smaller than the piece size
-                chunk = chunk.ljust(piece_size, b"\0")
-                data_pieces.append(chunk)
+    while True:
+        # Read one "row" of bytes across all data pieces
+        data_pieces = []
+        for _ in range(rs_data_pieces):
+            chunk = file.file.read(piece_size)  # Use synchronous file reading
+            if not chunk:
+                break  # End of file
+            # Pad chunk if it's smaller than the piece size
+            chunk = chunk.ljust(piece_size, b"\0")
+            data_pieces.append(chunk)
 
-            if not data_pieces:
-                break
+        if not data_pieces:
+            break
 
-            # Generate parity for the current row of bytes
-            for i in range(piece_size):
-                row = bytearray(piece[i] for piece in data_pieces)
-                parity_row = rs.encode(row)[rs_data_pieces:]  # Get parity bytes
-                for j, parity_byte in enumerate(parity_row):
-                    parity_buffers[j][i] = parity_byte
+        # Generate parity for the current row of bytes
+        for i in range(piece_size):
+            row = bytearray(piece[i] for piece in data_pieces)
+            parity_row = rs.encode(row)[rs_data_pieces:]  # Get parity bytes
+            for j, parity_byte in enumerate(parity_row):
+                parity_buffers[j][i] = parity_byte
 
-            # Yield the current chunks (data pieces)
-            for piece in data_pieces:
-                yield ("data", piece)
+        # Yield the current chunks (data pieces)
+        for piece in data_pieces:
+            yield ("data", piece)
 
-            # Yield the parity pieces for this chunk
-            for parity_buffer in parity_buffers:
-                yield ("parity", parity_buffer)
+        # Yield the parity pieces for this chunk
+        for parity_buffer in parity_buffers:
+            yield ("parity", bytes(parity_buffer))
