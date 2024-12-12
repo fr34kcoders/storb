@@ -2,7 +2,6 @@ import hashlib
 import math
 from typing import Generator
 
-import bittensor as bt
 import reedsolo
 from fastapi import UploadFile
 
