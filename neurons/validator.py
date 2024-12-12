@@ -20,9 +20,11 @@ import asyncio
 import time
 from datetime import UTC, datetime
 
+import aiosqlite
 import bittensor as bt
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
+from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 
 import storage_subnet.validator.db as db
 
@@ -101,48 +103,98 @@ async def vali() -> str:
 
 @app.get("/metadata/", response_model=MetadataResponse)
 async def obtain_metadata(infohash: str) -> MetadataResponse:
-    async with db.get_db_connection() as conn:
-        metadata = await db.get_metadata(conn, infohash)
-        if metadata is None:
-            return {}
-        return MetadataResponse(**metadata)
+    try:
+        async with db.get_db_connection() as conn:
+            metadata = await db.get_metadata(conn, infohash)
 
+            if metadata is None:
+                # Raise a 404 error if no metadata is found for the given infohash
+                raise HTTPException(status_code=404, detail="Metadata not found")
+
+            return MetadataResponse(**metadata)
+
+    except aiosqlite.OperationalError as e:
+        # Handle database-related errors
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    except Exception as e:
+        # Catch any other unexpected errors
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
 @app.post("/store/", response_model=StoreResponse)
 async def upload_file(file: UploadFile) -> StoreResponse:
-    bt.logging.trace(f"content size: {file.size}")
-    piece_size = piece_length(file.size)
-    filename = file.filename
-    filesize = file.size
+    try:
+        if not file.filename:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail="File must have a valid filename"
+            )
 
-    piece_hashes = []
+        bt.logging.trace(f"content size: {file.size}")
 
-    timestamp = str(datetime.now(UTC).timestamp())
-    for idx, piece in enumerate(split_file(file, piece_size)):
-        _, data = piece
-        p_hash = piece_hash(data)
-        piece_hashes.append(p_hash)
+        # Calculate the piece size
+        try:
+            piece_size = piece_length(file.size)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST,
+                detail=f"Invalid file size: {e}"
+            )
 
-        bt.logging.trace(
-            f"piece{idx} | piece size: {piece_size} bytes | hash: {p_hash}"
+        filename = file.filename
+        filesize = file.size
+
+        piece_hashes = []
+        timestamp = str(datetime.now(UTC).timestamp())
+
+        # Generate piece hashes
+        for idx, piece in enumerate(split_file(file, piece_size)):
+            _, data = piece
+            p_hash = piece_hash(data)
+            piece_hashes.append(p_hash)
+
+            bt.logging.trace(
+                f"piece{idx} | piece size: {piece_size} bytes | hash: {p_hash}"
+            )
+
+        # Generate infohash
+        infohash, _ = generate_infohash(
+            filename, timestamp, piece_size, filesize, piece_hashes
         )
-        # TODO: upload to miner(s) logic
-        # clear buffer after uploading :)
 
-    infohash, _ = generate_infohash(
-        filename, timestamp, piece_size, filesize, piece_hashes
-    )
+        # Store infohash and metadata in the database
+        try:
+            async with db.get_db_connection() as conn:
+                await db.store_infohash_piece_ids(conn, infohash, piece_hashes)
+                await db.store_metadata(
+                    conn, infohash, filename, timestamp, piece_size, filesize
+                )
+        except aiosqlite.OperationalError as e:
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Database error: {e}"
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Unexpected database error: {e}"
+            )
 
-    # store the infohash and their corresponding piece hashes in db
-    async with db.get_db_connection() as conn:
-        await db.store_infohash_piece_ids(conn, infohash, piece_hashes)
-        await db.store_metadata(
-            conn, infohash, filename, timestamp, piece_size, filesize
+        bt.logging.info(f"Uploaded file with infohash: {infohash}")
+        return StoreResponse(infohash=infohash)
+
+    except HTTPException as e:
+        # Log HTTP exceptions for debugging
+        bt.logging.error(f"HTTP exception: {e.detail}")
+        raise
+
+    except Exception as e:
+        # Catch any other unexpected errors
+        bt.logging.error(f"Unexpected error: {e}")
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected server error: {e}"
         )
-
-    bt.logging.info(f"Uploaded file with infohash: {infohash}")
-
-    return StoreResponse(infohash=infohash)
 
 
 # Async main loop for the validator
