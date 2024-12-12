@@ -24,6 +24,8 @@ import bittensor as bt
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 
+import storage_subnet.validator.db as db
+
 # import base validator class which takes care of most of the boilerplate
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import MAX_UPLOAD_SIZE, LogColor
@@ -122,7 +124,11 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         filename, timestamp, piece_size, filesize, piece_hashes
     )
 
-    bt.logging.debug(f"Uploaded file with infohash: {infohash}")
+    # store the infohash and their corresponding piece hashes in db
+    async with db.get_db_connection() as conn:
+        await db.store_infohash_piece_ids(conn, infohash, piece_hashes)
+
+    bt.logging.info(f"Uploaded file with infohash: {infohash}")
 
     return StoreResponse(infohash=infohash)
 

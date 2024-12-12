@@ -14,6 +14,7 @@ classifiers = [
 ]
 dependencies = [
     "aiofiles>=24.1.0",
+    "aiosqlite>=0.20.0",
     "bittensor==8.4.5",
     "fastapi>=0.110.3",
     "numpy==2.0.2",
