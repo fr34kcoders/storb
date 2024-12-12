@@ -18,7 +18,7 @@
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import bittensor as bt
 import uvicorn
@@ -29,7 +29,7 @@ import storage_subnet.validator.db as db
 # import base validator class which takes care of most of the boilerplate
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import MAX_UPLOAD_SIZE, LogColor
-from storage_subnet.protocol import StoreResponse
+from storage_subnet.protocol import MetadataResponse, StoreResponse
 from storage_subnet.utils.infohash import generate_infohash
 from storage_subnet.utils.piece import piece_hash, piece_length, split_file
 from storage_subnet.validator import forward
@@ -76,7 +76,7 @@ app = FastAPI(debug=False)
 async def logging_middleware(request: Request, call_next):
     # pretty colors for logging
 
-    bt.logging.debug(
+    bt.logging.info(
         f"{LogColor.BOLD}{LogColor.GREEN}Request{LogColor.RESET}: {LogColor.BOLD}{LogColor.BLUE}{request.method}{LogColor.RESET} {request.url}"
     )
     response = await call_next(request)
@@ -99,6 +99,15 @@ async def vali() -> str:
     return "Henlo!"
 
 
+@app.get("/metadata/", response_model=MetadataResponse)
+async def obtain_metadata(infohash: str) -> MetadataResponse:
+    async with db.get_db_connection() as conn:
+        metadata = await db.get_metadata(conn, infohash)
+        if metadata is None:
+            return {}
+        return MetadataResponse(**metadata)
+
+
 @app.post("/store/", response_model=StoreResponse)
 async def upload_file(file: UploadFile) -> StoreResponse:
     bt.logging.trace(f"content size: {file.size}")
@@ -112,7 +121,7 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         _, data = piece
         p_hash = piece_hash(data)
         piece_hashes.append(p_hash)
-        timestamp = str(datetime.utcnow().timestamp())
+        timestamp = str(datetime.now(UTC).timestamp())
 
         bt.logging.trace(
             f"piece{idx} | piece size: {piece_size} bytes | hash: {p_hash}"
@@ -127,6 +136,9 @@ async def upload_file(file: UploadFile) -> StoreResponse:
     # store the infohash and their corresponding piece hashes in db
     async with db.get_db_connection() as conn:
         await db.store_infohash_piece_ids(conn, infohash, piece_hashes)
+        await db.store_metadata(
+            conn, infohash, filename, timestamp, piece_size, filesize
+        )
 
     bt.logging.info(f"Uploaded file with infohash: {infohash}")
 

@@ -26,6 +26,14 @@ class StoreResponse(BaseModel):
     infohash: str
 
 
+class MetadataResponse(BaseModel):
+    infohash: str
+    filename: str
+    timestamp: str
+    piece_length: int
+    length: int
+
+
 class Dummy(bt.Synapse):
     """
     A simple dummy protocol representation which uses bt.Synapse as its base.

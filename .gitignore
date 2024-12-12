@@ -1,5 +1,6 @@
 .DS_Store
 .ruff_cache
+.vscode
 
 # db
 validator_database.db

@@ -2,12 +2,13 @@
 
 -- Table for mapping infohash to piece IDs
 CREATE TABLE infohash_piece_ids (
-    infohash TEXT PRIMARY KEY, -- Primary key for the table
+    infohash TEXT PRIMARY KEY, -- Infohash 
     piece_ids TEXT             -- JSON string representing piece IDs
 );
 
 -- Table for metadata associated with files
 CREATE TABLE metadata (
+    infohash TEXT PRIMARY KEY, -- Infohash 
     filename TEXT,             -- Name of the file
     timestamp TEXT,            -- Timestamp as a string (e.g., ISO 8601 format)
     piece_length INTEGER,      -- Length of each piece in bytes

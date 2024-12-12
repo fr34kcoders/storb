@@ -4,7 +4,6 @@ Provides functions for interacting with validator's database
 
 import json
 from contextlib import asynccontextmanager
-from typing import Optional
 
 import aiosqlite
 
@@ -36,6 +35,46 @@ async def store_infohash_piece_ids(
         (infohash, json.dumps(dict_piece_ids)),
     )
     await conn.commit()
+
+
+async def store_metadata(
+    conn: aiosqlite.Connection,
+    infohash: str,
+    filename: str,
+    timestamp: str,
+    piece_length: int,
+    length: int,
+) -> None:
+    query = f"INSERT INTO {METADATA} VALUES (?, ?, ?, ?, ?)"
+
+    await conn.execute(
+        query,
+        (
+            infohash,
+            filename,
+            timestamp,
+            piece_length,
+            length,
+        ),
+    )
+
+    await conn.commit()
+
+
+async def get_metadata(
+    conn: aiosqlite.Connection,
+    infohash: str,
+) -> dict:
+    query = f"SELECT * FROM {METADATA} WHERE infohash = ?"
+
+    # Use parameterized query to safely include infohash
+    cur = await conn.execute(query, (infohash,))
+    row = await cur.fetchone()
+
+    if row is None:
+        return None
+
+    return dict(row)
 
 
 # TODO: get stuff

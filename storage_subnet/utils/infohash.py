@@ -3,7 +3,7 @@ import json
 
 
 def generate_infohash(
-    name: str, timestamp: str, piece_length: int, length: int, pieces: list[str]
+    filename: str, timestamp: str, piece_length: int, length: int, pieces: list[str]
 ) -> tuple[str, dict[str, str | int | list[str]]]:
     """
     Generate the infohash from metadata and piece hashes.
@@ -22,7 +22,7 @@ def generate_infohash(
     """
     # Create the infohash metadata dictionary
     infohash_data: dict[str, str | int | list[str]] = {
-        "name": name,
+        "filename": filename,
         "timestamp": timestamp,
         "piece_length": piece_length,
         "length": length,
