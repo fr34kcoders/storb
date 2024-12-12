@@ -27,11 +27,12 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 
 import storage_subnet.validator.db as db
+from storage_subnet.api.get_query_axons import get_query_api_nodes
 
 # import base validator class which takes care of most of the boilerplate
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import MAX_UPLOAD_SIZE, LogColor
-from storage_subnet.protocol import MetadataResponse, StoreResponse
+from storage_subnet.protocol import MetadataResponse, MetadataSynapse, StoreResponse
 from storage_subnet.utils.infohash import generate_infohash
 from storage_subnet.utils.piece import piece_hash, piece_length, split_file
 from storage_subnet.validator import forward
@@ -52,7 +53,12 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info("load_state()")
         self.load_state()
 
-        # TODO(developer): Anything specific to your use case you can do here
+        bt.logging.info("Attaching get_metadata function to validator axon.")
+        self.axon.attach(forward_fn=self.get_metadata)
+        bt.logging.info(f"Axon created: {self.axon}")
+
+    async def get_metadata(self, synapse: MetadataSynapse):
+        return obtain_metadata(synapse.infohash)
 
     async def forward(self):
         """
@@ -121,13 +127,14 @@ async def obtain_metadata(infohash: str) -> MetadataResponse:
         # Catch any other unexpected errors
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
+
 @app.post("/store/", response_model=StoreResponse)
 async def upload_file(file: UploadFile) -> StoreResponse:
     try:
         if not file.filename:
             raise HTTPException(
                 status_code=HTTP_400_BAD_REQUEST,
-                detail="File must have a valid filename"
+                detail="File must have a valid filename",
             )
 
         bt.logging.trace(f"content size: {file.size}")
@@ -137,8 +144,7 @@ async def upload_file(file: UploadFile) -> StoreResponse:
             piece_size = piece_length(file.size)
         except ValueError as e:
             raise HTTPException(
-                status_code=HTTP_400_BAD_REQUEST,
-                detail=f"Invalid file size: {e}"
+                status_code=HTTP_400_BAD_REQUEST, detail=f"Invalid file size: {e}"
             )
 
         filename = file.filename
@@ -172,12 +178,12 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         except aiosqlite.OperationalError as e:
             raise HTTPException(
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error: {e}"
+                detail=f"Database error: {e}",
             )
         except Exception as e:
             raise HTTPException(
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Unexpected database error: {e}"
+                detail=f"Unexpected database error: {e}",
             )
 
         bt.logging.info(f"Uploaded file with infohash: {infohash}")
@@ -193,8 +199,53 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         bt.logging.error(f"Unexpected error: {e}")
         raise HTTPException(
             status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected server error: {e}"
+            detail=f"Unexpected server error: {e}",
         )
+
+
+# TODO: WIP
+@app.get("/get/")
+async def get_file(infohash: str):
+    # check local pieces from infohash
+
+    piece_ids = None
+    async with db.get_db_connection() as conn:
+        piece_ids = await db.get_pieces_from_infohash(conn, infohash)
+
+    if piece_ids is not None:
+        return "found locally"
+        # check integrity of file if found
+        # reassemble and return file
+
+    # if not in local db query other validators
+
+    # get validator uids
+    # vali_uids = await get_query_api_nodes(core_validator.dendrite, core_validator.metagraph)
+    active_uids = [
+        uid
+        for uid in range(core_validator.metagraph.n.item())
+        if core_validator.metagraph.axons[uid].is_serving
+    ]
+
+    responses = await core_validator.dendrite.forward(
+        # Send the query to selected miner axons in the network.
+        axons=[core_validator.metagraph.axons[uid] for uid in active_uids],
+        # Construct a dummy query. This simply contains a single integer.
+        synapse=MetadataSynapse(infohash=infohash),
+        # All responses have the deserialize function called on them before returning.
+        # You are encouraged to define your own deserialization function.
+        # deserialize=True,
+        deserialize=False,
+    )
+
+    for response in responses:
+        print(response)
+
+    # if found, update local tracker db
+
+    # check integrity of file
+
+    # reassemble and return file
 
 
 # Async main loop for the validator
