@@ -117,11 +117,11 @@ async def upload_file(file: UploadFile) -> StoreResponse:
 
     piece_hashes = []
 
+    timestamp = str(datetime.now(UTC).timestamp())
     for idx, piece in enumerate(split_file(file, piece_size)):
         _, data = piece
         p_hash = piece_hash(data)
         piece_hashes.append(p_hash)
-        timestamp = str(datetime.now(UTC).timestamp())
 
         bt.logging.trace(
             f"piece{idx} | piece size: {piece_size} bytes | hash: {p_hash}"
