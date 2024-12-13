@@ -286,10 +286,11 @@ async def get_file(infohash: str):
 
 
 # Async main loop for the validator
-async def run_validator(validator: Validator) -> None:
-    while True:
-        bt.logging.info(f"Validator running... {time.time()}")
-        await asyncio.sleep(5)
+async def run_validator() -> None:
+    try:
+        core_validator.run_in_background_thread()
+    except KeyboardInterrupt:
+        bt.logging.info("Keyboard interrupt received, exiting...")
 
 
 # Function to run the Uvicorn server
@@ -316,7 +317,7 @@ async def main() -> None:
     bt.logging.info(f"organic: {core_validator.config.organic}")
 
     if core_validator.config.organic:
-        await asyncio.gather(run_uvicorn_server(), run_validator(core_validator))
+        await asyncio.gather(run_uvicorn_server(), run_validator())
     else:
         with core_validator:
             while True:

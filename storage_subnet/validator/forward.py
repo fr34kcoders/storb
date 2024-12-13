@@ -38,7 +38,9 @@ async def forward(self):
     """
     # TODO(developer): Define how the validator selects a miner to query, how often, etc.
     # get_random_uids is an example method, but you can replace it with your own.
+    bt.logging.info(f"Getting {self.config.neuron.sample_size} random UIDs to query")
     miner_uids = get_random_uids(self, k=self.config.neuron.sample_size)
+    bt.logging.info(f"Uids to query: {miner_uids}")
 
     # The dendrite client queries the network.
     responses = await self.dendrite(
