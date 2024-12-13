@@ -64,11 +64,10 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info("load_state()")
         self.load_state()
 
-        bt.logging.info("Attaching get_metadata function to validator axon.")
-        self.axon.attach(forward_fn=self.get_metadata)
-        bt.logging.info(f"Axon created: {self.axon}")
+        # start the axon server
+        self.axon.start()
 
-    async def get_metadata(self, synapse: MetadataSynapse):
+    async def get_metadata(self, synapse: MetadataSynapse) -> MetadataResponse:
         return obtain_metadata(synapse.infohash)
 
     async def forward(self):

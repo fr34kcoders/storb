@@ -18,6 +18,7 @@
 # DEALINGS IN THE SOFTWARE.
 
 
+from abc import abstractmethod
 import argparse
 import asyncio
 import copy
@@ -84,12 +85,19 @@ class BaseValidatorNeuron(BaseNeuron):
         self.thread: Union[threading.Thread, None] = None
         self.lock = asyncio.Lock()
 
+    @abstractmethod
+    async def get_metadata(self, synapse: bt.Synapse) -> bt.Synapse: ...
+
     def serve_axon(self):
         """Serve axon to enable external connections."""
 
         bt.logging.info("serving ip to chain...")
         try:
             self.axon = bt.axon(wallet=self.wallet, config=self.config)
+
+            bt.logging.info("Attaching get_metadata function to validator axon.")
+            self.axon.attach(forward_fn=self.get_metadata)
+            bt.logging.info(f"Axon created: {self.axon}")
 
             try:
                 self.subtensor.serve_axon(
