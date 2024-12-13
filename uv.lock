@@ -1410,7 +1410,7 @@ dependencies = [
     { name = "zfec" },
 ]
 
-[package.dev-dependencies]
+[package.dependency-groups]
 dev = [
     { name = "debugpy" },
     { name = "ruff" },

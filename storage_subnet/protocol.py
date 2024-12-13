@@ -22,9 +22,21 @@ import bittensor as bt
 from pydantic import BaseModel
 
 
+class Store(bt.Synapse):
+    ptype: str
+    piece: str
+    pad_len: int
+
+class Retrieve(bt.Synapse):
+    piece_id: str # hash of piece
+
+class RetrieveResponse(bt.Synapse):
+    ptype: str
+    piece: bytes
+    pad_len: int
+
 class StoreResponse(BaseModel):
     infohash: str
-
 
 class MetadataSynapse(bt.Synapse):
     infohash: str

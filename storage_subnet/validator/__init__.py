@@ -1,3 +1,3 @@
 from .db import *
-from .forward import forward
+from .forward import *
 from .reward import reward
