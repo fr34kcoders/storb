@@ -17,6 +17,7 @@
 # DEALINGS IN THE SOFTWARE.
 
 import asyncio
+import hashlib
 import time
 from datetime import UTC, datetime
 
@@ -33,8 +34,20 @@ from storage_subnet.api.get_query_axons import get_query_api_nodes
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import MAX_UPLOAD_SIZE, LogColor
 from storage_subnet.protocol import MetadataResponse, MetadataSynapse, StoreResponse
+from storage_subnet.constants import (
+    MAX_UPLOAD_SIZE,
+    RS_DATA_SIZE,
+    RS_PARITY_SIZE,
+    LogColor,
+)
+from storage_subnet.protocol import MetadataResponse, StoreResponse
 from storage_subnet.utils.infohash import generate_infohash
-from storage_subnet.utils.piece import piece_hash, piece_length, split_file
+from storage_subnet.utils.piece import (
+    piece_hash,
+    piece_length,
+    reconstruct_file,
+    split_file,
+)
 from storage_subnet.validator import forward
 
 
@@ -146,26 +159,52 @@ async def upload_file(file: UploadFile) -> StoreResponse:
                 status_code=HTTP_400_BAD_REQUEST, detail=f"Invalid file size: {e}"
             )
 
+        # Read the entire file content for checksum
+        file_content = await file.read()
+        og_checksum = hashlib.sha256(file_content).hexdigest()
+        file.file.seek(0)
         filename = file.filename
         filesize = file.size
-
         piece_hashes = []
+        pieces = []
+
+        # Use constants for data/parity pieces
+        data_pieces = RS_DATA_SIZE
+        parity_pieces = RS_PARITY_SIZE
+
         timestamp = str(datetime.now(UTC).timestamp())
 
-        # Generate piece hashes
-        for idx, piece in enumerate(split_file(file, piece_size)):
-            _, data = piece
+        # Generate and store all pieces
+        # split_file yields (ptype, data, padlen)
+        for idx, (ptype, data, pad) in enumerate(
+            split_file(file, piece_size, data_pieces, parity_pieces)
+        ):
             p_hash = piece_hash(data)
             piece_hashes.append(p_hash)
-
+            pieces.append((ptype, data, pad))
             bt.logging.trace(
                 f"piece{idx} | piece size: {piece_size} bytes | hash: {p_hash}"
             )
+
+        bt.logging.trace(f"file checksum: {og_checksum}")
 
         # Generate infohash
         infohash, _ = generate_infohash(
             filename, timestamp, piece_size, filesize, piece_hashes
         )
+
+        # TODO: Remove reconstruction from upload api before shipping
+        # Reconstruct the file from the pieces
+        reconstructed_data = reconstruct_file(pieces, data_pieces, parity_pieces)
+        reconstructed_hash = hashlib.sha256(reconstructed_data).hexdigest()
+
+        bt.logging.trace(f"reconstructed checksum: {reconstructed_hash}")
+
+        # Verify file integrity
+        if reconstructed_hash != og_checksum:
+            raise HTTPException(
+                status_code=HTTP_400_BAD_REQUEST, detail="File integrity check failed"
+            )
 
         # Store infohash and metadata in the database
         try:

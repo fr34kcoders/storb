@@ -31,6 +31,6 @@ def generate_infohash(
 
     # Serialize the dictionary into JSON and calculate its SHA-1 hash
     infohash_json = json.dumps(infohash_data, separators=(",", ":")).encode("utf-8")
-    infohash_sha1 = hashlib.sha256(infohash_json).hexdigest()
+    infohash = hashlib.sha256(infohash_json).hexdigest()
 
-    return infohash_sha1, infohash_data
+    return infohash, infohash_data
