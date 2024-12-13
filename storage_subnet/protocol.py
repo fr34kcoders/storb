@@ -25,8 +25,10 @@ from pydantic import BaseModel
 class StoreResponse(BaseModel):
     infohash: str
 
+
 class MetadataSynapse(bt.Synapse):
     infohash: str
+
 
 class MetadataResponse(bt.Synapse):
     infohash: str
