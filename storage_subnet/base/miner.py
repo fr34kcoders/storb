@@ -58,15 +58,6 @@ class BaseMinerNeuron(BaseNeuron):
             config=self.config() if callable(self.config) else self.config,
         )
 
-        # Attach determiners which functions are called when servicing a request.
-        bt.logging.info("Attaching forward function to miner axon.")
-        self.axon.attach(
-            forward_fn=self.forward,
-            blacklist_fn=self.blacklist,
-            priority_fn=self.priority,
-        )
-        bt.logging.info(f"Axon created: {self.axon}")
-
         # Instantiate runners
         self.should_exit: bool = False
         self.is_running: bool = False
@@ -119,7 +110,7 @@ class BaseMinerNeuron(BaseNeuron):
                     < self.config.neuron.epoch_length
                 ):
                     # Wait before checking again.
-                    time.sleep(1)
+                    # time.sleep(1)
 
                     # Check if we should exit.
                     if self.should_exit:
@@ -128,6 +119,9 @@ class BaseMinerNeuron(BaseNeuron):
                 # Sync metagraph and potentially set weights.
                 self.sync()
                 self.step += 1
+
+                # TODO: there is a better way to do this fosure
+                time.sleep(30)
 
         # If someone intentionally stops the miner, it'll safely terminate operations.
         except KeyboardInterrupt:

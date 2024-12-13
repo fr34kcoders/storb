@@ -1,5 +1,10 @@
 from enum import StrEnum
 
+# TODO: make this variable - dependant on file size?
+QUERY_TIMEOUT = 10
+NUM_UIDS_QUERY = 5
+QUERY_RATE = 10 # in blocks
+
 MIN_PIECE_SIZE = 16 * 1024  # 16 KiB
 MAX_PIECE_SIZE = 16 * 1024 * 1024  # 16 MiB
 PIECE_LENGTH_SCALING = 0.5

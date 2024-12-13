@@ -58,6 +58,7 @@ def split_file(
     piece_size: int,
     data_pieces: int = RS_DATA_SIZE,
     parity_pieces: int = RS_PARITY_SIZE,
+    # TODO: use strenum for piece type?
 ) -> Generator[tuple[str, bytes, int], None, None]:
     """
     Stream data and parity pieces as they are generated.
