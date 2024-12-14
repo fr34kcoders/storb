@@ -74,8 +74,8 @@ async def query_miner(
     synapse: bt.Synapse,
     uid: str,
     deserialize: bool = False,
-) -> bt.Synapse:
-    return await self.dendrite.forward(
+) -> tuple[int, bt.Synapse]:
+    return uid, await self.dendrite.forward(
         axons=self.metagraph.axons[int(uid)],
         synapse=synapse,
         timeout=QUERY_TIMEOUT,

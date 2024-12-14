@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 
 class StoreBase(BaseModel):
     ptype: str
-    piece: str
+    piece: typing.Optional[str] = Field(default=None)
     pad_len: int
     piece_id: typing.Optional[str] = Field(default=None)
 
@@ -32,6 +32,9 @@ class StoreBase(BaseModel):
 class Store(bt.Synapse, StoreBase):
     def __str__(self) -> str:
         return f"Store(ptype={self.ptype}, piece={self.piece[:5]}..., pad_len={self.pad_len}, piece_id={self.piece_id})"
+
+    def preview_no_piece(self) -> str:
+        return f"Store(ptype={self.ptype}, pad_len={self.pad_len}, piece_id={self.piece_id})"
 
 
 class Retrieve(bt.Synapse):
