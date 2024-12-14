@@ -15,6 +15,7 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+from abc import abstractmethod
 import argparse
 import asyncio
 import threading
@@ -64,6 +65,12 @@ class BaseMinerNeuron(BaseNeuron):
         self.thread: Union[threading.Thread, None] = None
         self.lock = asyncio.Lock()
 
+    @abstractmethod
+    async def store(self, synapse: bt.Synapse) -> bt.Synapse: ...
+
+    @abstractmethod
+    async def retrieve(self, synapse: bt.Synapse) -> bt.Synapse: ...
+
     def run(self):
         """
         Initiates and manages the main loop for the miner on the Bittensor network. The main loop handles graceful shutdown on keyboard interrupts and logs unforeseen errors.
@@ -89,6 +96,14 @@ class BaseMinerNeuron(BaseNeuron):
 
         # Check that miner is registered on the network.
         self.sync()
+
+        # attach to axon
+        bt.logging.info("Attaching store axon")
+        self.axon.attach(forward_fn=self.store)
+        bt.logging.info("Attached!")
+        bt.logging.info("Attaching retrieve axon")
+        self.axon.attach(forward_fn=self.retrieve)
+        bt.logging.info("Attached!")
 
         # Serve passes the axon information to the network + netuid we are hosting on.
         # This will auto-update if the axon port of external ip have changed.

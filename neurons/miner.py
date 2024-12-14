@@ -71,7 +71,6 @@ class Miner(BaseMinerNeuron):
 
         response = storage_subnet.protocol.Store(
             ptype=synapse.ptype,
-            piece=synapse.piece,
             pad_len=synapse.pad_len,
             piece_id=piece_id,
         )
