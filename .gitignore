@@ -1,5 +1,9 @@
 .DS_Store
 .ruff_cache
+.vscode
+
+# db
+validator_database.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

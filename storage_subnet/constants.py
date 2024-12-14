@@ -7,6 +7,11 @@ PIECE_LENGTH_OFFSET = 8.39  # these params should split a 1GiB file to 128 piece
 
 MAX_UPLOAD_SIZE = 1 * 1024 * 1024 * 1024 * 1024  # 1 TiB
 
+# Error correction encoding parameters
+# For every 4 data pieces, there are 2 parity pieces
+EC_DATA_SIZE = 4
+EC_PARITY_SIZE = 2
+
 
 class LogColor(StrEnum):
     RESET = "\033[0m"
