@@ -39,6 +39,7 @@ class Store(bt.Synapse, StoreBase):
 
 class Retrieve(bt.Synapse):
     piece_id: str  # hash of piece
+    piece: typing.Optional[str] = Field(default=None)  # base64 encoded piece
 
 
 class RetrieveResponse(bt.Synapse):
