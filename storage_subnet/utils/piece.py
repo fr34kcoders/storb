@@ -77,14 +77,8 @@ def split_file(
     encoder = Encoder(data_pieces, total_pieces)
     chunk_count = 0
 
-    while True:
-        chunk_count += 1
+    while chunk := file.file.read(data_pieces * piece_size):
         bt.logging.trace(f"Reading chunk {chunk_count}...")
-        # Read the next chunk of data
-        chunk = file.file.read(data_pieces * piece_size)
-        if not chunk:
-            bt.logging.trace("End of file.")
-            break  # End of file
 
         # Calculate padding length
         padlen = (data_pieces * piece_size) - len(chunk)
@@ -110,6 +104,7 @@ def split_file(
             bt.logging.trace(f"Yielding parity piece {i}...")
             yield ("parity", encoded_blocks[i], padlen)
 
+        chunk_count += 1
 
 def reconstruct_file(
     pieces: list[tuple[str, bytes, int]],
