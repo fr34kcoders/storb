@@ -19,24 +19,34 @@
 import typing
 
 import bittensor as bt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
-class Store(bt.Synapse):
+class StoreBase(BaseModel):
     ptype: str
     piece: str
     pad_len: int
+    piece_id: typing.Optional[str] = Field(default=None)
+
+
+class Store(bt.Synapse, StoreBase):
+    def __str__(self) -> str:
+        return f"Store(ptype={self.ptype}, piece={self.piece[:5]}..., pad_len={self.pad_len}, piece_id={self.piece_id})"
+
 
 class Retrieve(bt.Synapse):
-    piece_id: str # hash of piece
+    piece_id: str  # hash of piece
+
 
 class RetrieveResponse(bt.Synapse):
     ptype: str
     piece: bytes
     pad_len: int
 
+
 class StoreResponse(BaseModel):
     infohash: str
+
 
 class MetadataSynapse(bt.Synapse):
     infohash: str

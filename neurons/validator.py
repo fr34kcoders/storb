@@ -19,7 +19,6 @@
 import asyncio
 import base64
 import hashlib
-import time
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -28,26 +27,23 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 
-from storage_subnet.utils.uids import get_random_uids
 import storage_subnet.validator.db as db
-from storage_subnet.api.get_query_axons import get_query_api_nodes
 
 # import base validator class which takes care of most of the boilerplate
 from storage_subnet.base.validator import BaseValidatorNeuron
-from storage_subnet.constants import MAX_UPLOAD_SIZE, NUM_UIDS_QUERY, LogColor
+from storage_subnet.constants import (
+    MAX_UPLOAD_SIZE,
+    NUM_UIDS_QUERY,
+    EC_DATA_SIZE,
+    EC_PARITY_SIZE,
+    LogColor,
+)
 from storage_subnet.protocol import (
     MetadataResponse,
     MetadataSynapse,
     Store,
     StoreResponse,
 )
-from storage_subnet.constants import (
-    EC_DATA_SIZE,
-    EC_PARITY_SIZE,
-    MAX_UPLOAD_SIZE,
-    LogColor,
-)
-from storage_subnet.protocol import MetadataResponse, MetadataSynapse, StoreResponse
 from storage_subnet.utils.infohash import generate_infohash
 from storage_subnet.utils.piece import (
     piece_hash,
@@ -55,6 +51,7 @@ from storage_subnet.utils.piece import (
     reconstruct_file,
     split_file,
 )
+from storage_subnet.utils.uids import get_random_uids
 from storage_subnet.validator import forward, query_multiple_miners
 
 
@@ -184,6 +181,7 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         # Generate and store all pieces
         # split_file yields (ptype, data, padlen)
         uids = get_random_uids(core_validator, k=NUM_UIDS_QUERY)
+        bt.logging.info(f"uids to query: {uids}")
 
         for idx, (ptype, data, pad) in enumerate(
             split_file(file, piece_size, data_pieces, parity_pieces)
@@ -198,15 +196,21 @@ async def upload_file(file: UploadFile) -> StoreResponse:
             b64_encoded_piece = b64_encoded_piece.decode("utf-8")
 
             bt.logging.trace(
-                f"piece{idx} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {b64_encoded_piece[:10]}"
+                f"piece{idx} | type: {ptype} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {b64_encoded_piece[:10]}"
             )
 
             # upload piece(s) to miner(s)
-            await query_multiple_miners(
+            # TODO: this is not optimal - we should probably batch multiple requests
+            # and send them at once with asyncio create_task() and gather()
+            responses = await query_multiple_miners(
                 core_validator,
                 synapse=Store(ptype=ptype, piece=b64_encoded_piece, pad_len=pad),
                 uids=uids,
             )
+
+            # TODO: score responses - consider responses that return the piece id to be successful?
+            for response in responses:
+                bt.logging.debug(f"response: {str(response)}")
 
         bt.logging.trace(f"file checksum: {og_checksum}")
 
