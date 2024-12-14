@@ -4,6 +4,7 @@ Provides functions for interacting with validator's database
 
 import json
 from contextlib import asynccontextmanager
+from typing import Optional
 
 import aiosqlite
 
@@ -78,15 +79,15 @@ async def get_metadata(
 
 
 # TODO: get stuff
-# async def get_pieces_from_infohash(
-#     conn: aiosqlite.Connection, infohash: str
-# ) -> Optional[list[str]]:
-#     query = f"SELECT piece_ids FROM {INFOHASH_PIECE_IDS} WHERE infohash = ?"
+async def get_pieces_from_infohash(
+    conn: aiosqlite.Connection, infohash: str
+) -> Optional[list[str]]:  # noqa: F821
+    query = f"SELECT piece_ids FROM {INFOHASH_PIECE_IDS} WHERE infohash = ?"
 
-#     cur = await conn.execute(query, (infohash,))  # Use a tuple for parameters
-#     row = await cur.fetchone()
+    cur = await conn.execute(query, (infohash,))  # Use a tuple for parameters
+    row = await cur.fetchone()
 
-#     if row is None:
-#         return None
+    if row is None:
+        return None
 
-#     return json.loads(row["piece_ids"])  # Extract JSON from the result
+    return json.loads(row["piece_ids"])  # Extract JSON from the result

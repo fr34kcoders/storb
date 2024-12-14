@@ -17,6 +17,7 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+import base64
 import time
 import typing
 
@@ -27,6 +28,7 @@ import storage_subnet
 
 # import base miner class which takes care of most of the boilerplate
 from storage_subnet.base.miner import BaseMinerNeuron
+from storage_subnet.utils.piece import piece_hash
 
 
 class Miner(BaseMinerNeuron):
@@ -41,27 +43,50 @@ class Miner(BaseMinerNeuron):
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
 
-        # TODO(developer): Anything specific to your use case you can do here
+        bt.logging.info("Attaching store axon")
+        self.axon.attach(forward_fn=self.store)
+        bt.logging.info("Attached!")
+        bt.logging.info("Attaching retrieve axon")
+        self.axon.attach(forward_fn=self.retrieve)
+        bt.logging.info("Attached!")
 
-    async def forward(
-        self, synapse: storage_subnet.protocol.Dummy
-    ) -> storage_subnet.protocol.Dummy:
+    async def forward(self, synapse: bt.Synapse) -> None:
+        return None
+
+    async def store(
+        self, synapse: storage_subnet.protocol.Store
+    ) -> storage_subnet.protocol.Store:
         """
-        Processes the incoming 'Dummy' synapse by performing a predefined operation on the input data.
-        This method should be replaced with actual logic relevant to the miner's purpose.
+        Stores piece
 
         Args:
-            synapse (template.protocol.Dummy): The synapse object containing the 'dummy_input' data.
-
-        Returns:
-            template.protocol.Dummy: The synapse object with the 'dummy_output' field set to twice the 'dummy_input' value.
-
-        The 'forward' function is a placeholder and should be overridden with logic that is appropriate for
-        the miner's intended operation. This method demonstrates a basic transformation of input data.
+            synapse (template.protocol.Store): The synapse object containing piece
         """
-        # TODO(developer): Replace with actual implementation logic.
-        synapse.dummy_output = synapse.dummy_input * 2
-        return synapse
+        bt.logging.info("Received store request")
+        decoded_piece = base64.b64decode(synapse.piece.encode("utf-8"))
+        piece_id = piece_hash(decoded_piece)
+        bt.logging.debug(
+            f"ptype: {synapse.ptype} | piece preview: {decoded_piece[:10]} | hash: {piece_id} | pad len: {synapse.pad_len}"
+        )
+
+        response = storage_subnet.protocol.Store(
+            ptype=synapse.ptype,
+            pad_len=synapse.pad_len,
+            piece_id=piece_id,
+        )
+
+        return response
+
+    # TODO: return piece and other info
+    async def retrieve(self, synapse: storage_subnet.protocol.Retrieve):
+        """
+        Returns piece from miner storage
+
+        Args:
+            synapse (template.protocol.Store): The synapse object containing piece
+        """
+        bt.logging.info("Retrieving piece...")
+        bt.logging.debug(f"piece id to retrieve: {synapse.piece_id}")
 
     async def blacklist(
         self, synapse: storage_subnet.protocol.Dummy

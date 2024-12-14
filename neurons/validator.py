@@ -17,8 +17,8 @@
 # DEALINGS IN THE SOFTWARE.
 
 import asyncio
+import base64
 import hashlib
-import time
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -35,9 +35,15 @@ from storage_subnet.constants import (
     EC_DATA_SIZE,
     EC_PARITY_SIZE,
     MAX_UPLOAD_SIZE,
+    NUM_UIDS_QUERY,
     LogColor,
 )
-from storage_subnet.protocol import MetadataResponse, StoreResponse
+from storage_subnet.protocol import (
+    MetadataResponse,
+    MetadataSynapse,
+    Store,
+    StoreResponse,
+)
 from storage_subnet.utils.infohash import generate_infohash
 from storage_subnet.utils.piece import (
     piece_hash,
@@ -45,7 +51,8 @@ from storage_subnet.utils.piece import (
     reconstruct_file,
     split_file,
 )
-from storage_subnet.validator import forward
+from storage_subnet.utils.uids import get_random_uids
+from storage_subnet.validator import forward, query_multiple_miners
 
 
 # Define the Validator class
@@ -63,7 +70,11 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info("load_state()")
         self.load_state()
 
-        # TODO(developer): Anything specific to your use case you can do here
+        # start the axon server
+        self.axon.start()
+
+    async def get_metadata(self, synapse: MetadataSynapse) -> MetadataResponse:
+        return obtain_metadata(synapse.infohash)
 
     async def forward(self):
         """
@@ -169,17 +180,60 @@ async def upload_file(file: UploadFile) -> StoreResponse:
 
         # Generate and store all pieces
         # split_file yields (ptype, data, padlen)
+        uids = get_random_uids(core_validator, k=NUM_UIDS_QUERY)
+        bt.logging.info(f"uids to query: {uids}")
+
+        curr_batch_size = 0
+        to_query = []
+
         for idx, (ptype, data, pad) in enumerate(
             split_file(file, piece_size, data_pieces, parity_pieces)
         ):
             p_hash = piece_hash(data)
             piece_hashes.append(p_hash)
             pieces.append((ptype, data, pad))
+
+            # get ready to upload piece(s) to miner(s)
+            # TODO: we base64 encode the data before sending it to the miner(s) for now
+            b64_encoded_piece = base64.b64encode(data)
+            b64_encoded_piece = b64_encoded_piece.decode("utf-8")
+
             bt.logging.trace(
-                f"piece{idx} | piece size: {piece_size} bytes | hash: {p_hash}"
+                f"piece{idx} | type: {ptype} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {b64_encoded_piece[:10]}"
             )
 
+            # upload piece(s) to miner(s)
+            # TODO: this is not optimal - we should probably batch multiple requests
+            # and send them at once with asyncio create_task() and gather()
+            to_query.append(
+                asyncio.create_task(
+                    query_multiple_miners(
+                        core_validator,
+                        synapse=Store(
+                            ptype=ptype, piece=b64_encoded_piece, pad_len=pad
+                        ),
+                        uids=uids,
+                    )
+                )
+            )
+
+            curr_batch_size += 1
+            if curr_batch_size >= core_validator.config.query_batch_size:
+                bt.logging.info(f"Sending {curr_batch_size} batched requests...")
+                batch_responses = await asyncio.gather(*to_query)
+                bt.logging.info("Sent batched requests")
+                for piece_batch in batch_responses:
+                    for uid, response in piece_batch:
+                        bt.logging.debug(
+                            f"uid: {uid} response: {response.preview_no_piece()}"
+                        )
+
+                curr_batch_size = 0
+                to_query = []
+
         bt.logging.trace(f"file checksum: {og_checksum}")
+
+        # TODO: score responses - consider responses that return the piece id to be successful?
 
         # Generate infohash
         infohash, _ = generate_infohash(
@@ -234,18 +288,68 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         )
 
 
+# TODO: WIP
+@app.get("/retrieve/")
+async def retrieve_file(infohash: str):
+    # check local pieces from infohash
+
+    piece_ids = None
+    async with db.get_db_connection() as conn:
+        piece_ids = await db.get_pieces_from_infohash(conn, infohash)
+
+    if piece_ids is not None:
+        return "found locally"
+        # check integrity of file if found
+        # reassemble and return file
+
+    # if not in local db query other validators
+
+    # get validator uids
+    # vali_uids = await get_query_api_nodes(core_validator.dendrite, core_validator.metagraph)
+    active_uids = [
+        uid
+        for uid in range(core_validator.metagraph.n.item())
+        if core_validator.metagraph.axons[uid].is_serving
+    ]
+
+    responses = await core_validator.dendrite.forward(
+        # Send the query to selected miner axons in the network.
+        axons=[core_validator.metagraph.axons[uid] for uid in active_uids],
+        # Construct a dummy query. This simply contains a single integer.
+        synapse=MetadataSynapse(infohash=infohash),
+        # All responses have the deserialize function called on them before returning.
+        # You are encouraged to define your own deserialization function.
+        # deserialize=True,
+        deserialize=False,
+    )
+
+    for response in responses:
+        print(response)
+
+    # if found, update local tracker db
+
+    # check integrity of file
+
+    # reassemble and return file
+
+
 # Async main loop for the validator
-async def run_validator(validator: Validator) -> None:
-    while True:
-        bt.logging.info(f"Validator running... {time.time()}")
-        await asyncio.sleep(5)
+async def run_validator() -> None:
+    try:
+        core_validator.run_in_background_thread()
+    except KeyboardInterrupt:
+        bt.logging.info("Keyboard interrupt received, exiting...")
 
 
 # Function to run the Uvicorn server
 async def run_uvicorn_server() -> None:
     bt.logging.info("Starting API...")
     config = uvicorn.Config(
-        app, host="0.0.0.0", port=core_validator.config.api_port, log_level="info"
+        app,
+        host="0.0.0.0",
+        port=core_validator.config.api_port,
+        log_level="info",
+        loop="asyncio",
     )
     server = uvicorn.Server(config)
     await server.serve()
@@ -265,7 +369,7 @@ async def main() -> None:
     bt.logging.info(f"organic: {core_validator.config.organic}")
 
     if core_validator.config.organic:
-        await asyncio.gather(run_uvicorn_server(), run_validator(core_validator))
+        await asyncio.gather(run_uvicorn_server(), run_validator())
     else:
         with core_validator:
             while True:

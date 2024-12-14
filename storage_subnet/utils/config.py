@@ -22,6 +22,8 @@ import subprocess
 
 import bittensor as bt
 
+from storage_subnet.constants import MAX_QUERY_BATCH_SIZE
+
 from .logging import setup_events_logger
 
 
@@ -265,6 +267,13 @@ def add_validator_args(cls, parser):
         type=int,
         help="api port",
         default=6969,
+    )
+
+    parser.add_argument(
+        "--query_batch_size",
+        type=int,
+        help="max store query batch size",
+        default=MAX_QUERY_BATCH_SIZE,
     )
 
 

@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import copy
 import threading
+from abc import abstractmethod
 from traceback import print_exception
 from typing import List, Union
 
@@ -33,6 +34,7 @@ from storage_subnet.base.utils.weight_utils import (
     convert_weights_and_uids_for_emit,
     process_weights_for_netuid,
 )  # TODO: Replace when bittensor switches to numpy
+from storage_subnet.constants import QUERY_RATE
 from storage_subnet.mock import MockDendrite
 from storage_subnet.utils.config import add_validator_args
 
@@ -51,6 +53,9 @@ class BaseValidatorNeuron(BaseNeuron):
 
     def __init__(self, config=None):
         super().__init__(config=config)
+
+        # set last query block to be 0
+        self.last_query_block = 0
 
         # Save a copy of the hotkeys to local memory.
         self.hotkeys = copy.deepcopy(self.metagraph.hotkeys)
@@ -84,12 +89,19 @@ class BaseValidatorNeuron(BaseNeuron):
         self.thread: Union[threading.Thread, None] = None
         self.lock = asyncio.Lock()
 
+    @abstractmethod
+    async def get_metadata(self, synapse: bt.Synapse) -> bt.Synapse: ...
+
     def serve_axon(self):
         """Serve axon to enable external connections."""
 
         bt.logging.info("serving ip to chain...")
         try:
             self.axon = bt.axon(wallet=self.wallet, config=self.config)
+
+            bt.logging.info("Attaching get_metadata function to validator axon.")
+            self.axon.attach(forward_fn=self.get_metadata)
+            bt.logging.info(f"Axon created: {self.axon}")
 
             try:
                 self.subtensor.serve_axon(
@@ -141,27 +153,31 @@ class BaseValidatorNeuron(BaseNeuron):
         # This loop maintains the validator's operations until intentionally stopped.
         try:
             while True:
-                bt.logging.info(f"step({self.step}) block({self.block})")
+                current_block = self.subtensor.block
+                # in blocks
+                if current_block - self.last_query_block > QUERY_RATE:
+                    bt.logging.info(f"step({self.step}) block({self.block})")
 
-                # Run multiple forwards concurrently.
-                # self.loop.run_until_complete(self.concurrent_forward())
-                if self.config.organic:
-                    bt.logging.debug("organic run")
-                    future = asyncio.run_coroutine_threadsafe(
-                        self.concurrent_forward(), self.loop
-                    )
-                    future.result()  # Wait for the coroutine to complete
-                else:
-                    self.loop.run_until_complete(self.concurrent_forward())
+                    # Run multiple forwards concurrently.
+                    # self.loop.run_until_complete(self.concurrent_forward())
+                    if self.config.organic:
+                        bt.logging.debug("organic run")
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.concurrent_forward(), self.loop
+                        )
+                        future.result()  # Wait for the coroutine to complete
+                    else:
+                        self.loop.run_until_complete(self.concurrent_forward())
 
-                # Check if we should exit.
-                if self.should_exit:
-                    break
+                    # Check if we should exit.
+                    if self.should_exit:
+                        break
 
-                # Sync metagraph and potentially set weights.
-                self.sync()
+                    # Sync metagraph and potentially set weights.
+                    self.sync()
+                    self.last_query_block = current_block
 
-                self.step += 1
+                    self.step += 1
 
         # If someone intentionally stops the validator, it'll safely terminate operations.
         except KeyboardInterrupt:
