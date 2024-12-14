@@ -32,10 +32,10 @@ import storage_subnet.validator.db as db
 # import base validator class which takes care of most of the boilerplate
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import (
-    MAX_UPLOAD_SIZE,
-    NUM_UIDS_QUERY,
     EC_DATA_SIZE,
     EC_PARITY_SIZE,
+    MAX_UPLOAD_SIZE,
+    NUM_UIDS_QUERY,
     LogColor,
 )
 from storage_subnet.protocol import (
