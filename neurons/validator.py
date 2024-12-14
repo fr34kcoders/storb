@@ -183,6 +183,9 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         uids = get_random_uids(core_validator, k=NUM_UIDS_QUERY)
         bt.logging.info(f"uids to query: {uids}")
 
+        curr_batch_size = 0
+        to_query = []
+
         for idx, (ptype, data, pad) in enumerate(
             split_file(file, piece_size, data_pieces, parity_pieces)
         ):
@@ -202,17 +205,35 @@ async def upload_file(file: UploadFile) -> StoreResponse:
             # upload piece(s) to miner(s)
             # TODO: this is not optimal - we should probably batch multiple requests
             # and send them at once with asyncio create_task() and gather()
-            responses = await query_multiple_miners(
-                core_validator,
-                synapse=Store(ptype=ptype, piece=b64_encoded_piece, pad_len=pad),
-                uids=uids,
+            to_query.append(
+                asyncio.create_task(
+                    query_multiple_miners(
+                        core_validator,
+                        synapse=Store(
+                            ptype=ptype, piece=b64_encoded_piece, pad_len=pad
+                        ),
+                        uids=uids,
+                    )
+                )
             )
 
-            # TODO: score responses - consider responses that return the piece id to be successful?
-            for response in responses:
-                bt.logging.debug(f"response: {str(response)}")
+            curr_batch_size += 1
+            if curr_batch_size >= core_validator.config.query_batch_size:
+                bt.logging.info(f"Sending {curr_batch_size} batched requests...")
+                batch_responses = await asyncio.gather(*to_query)
+                bt.logging.info("Sent batched requests")
+                for piece_batch in batch_responses:
+                    for uid, response in piece_batch:
+                        bt.logging.debug(
+                            f"uid: {uid} response: {response.preview_no_piece()}"
+                        )
+
+                curr_batch_size = 0
+                to_query = []
 
         bt.logging.trace(f"file checksum: {og_checksum}")
+
+        # TODO: score responses - consider responses that return the piece id to be successful?
 
         # Generate infohash
         infohash, _ = generate_infohash(
