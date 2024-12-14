@@ -17,6 +17,7 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+import base64
 import time
 import typing
 
@@ -27,6 +28,7 @@ import storage_subnet
 
 # import base miner class which takes care of most of the boilerplate
 from storage_subnet.base.miner import BaseMinerNeuron
+from storage_subnet.utils.piece import piece_hash
 
 
 class Miner(BaseMinerNeuron):
@@ -51,7 +53,9 @@ class Miner(BaseMinerNeuron):
     async def forward(self, synapse: bt.Synapse) -> None:
         return None
 
-    async def store(self, synapse: storage_subnet.protocol.Store):
+    async def store(
+        self, synapse: storage_subnet.protocol.Store
+    ) -> storage_subnet.protocol.Store:
         """
         Stores piece
 
@@ -59,12 +63,20 @@ class Miner(BaseMinerNeuron):
             synapse (template.protocol.Store): The synapse object containing piece
         """
         bt.logging.info("Received store request")
+        decoded_piece = base64.b64decode(synapse.piece.encode("utf-8"))
+        piece_id = piece_hash(decoded_piece)
         bt.logging.debug(
-            f"ptype: {synapse.ptype} | piece preview: {synapse.piece[:10]} | pad len: {synapse.pad_len}"
+            f"ptype: {synapse.ptype} | piece preview: {decoded_piece[:10]} | hash: {piece_id} | pad len: {synapse.pad_len}"
         )
 
-        # TODO(developer): Replace with actual implementation logic.
-        return synapse
+        response = storage_subnet.protocol.Store(
+            ptype=synapse.ptype,
+            piece=synapse.piece,
+            pad_len=synapse.pad_len,
+            piece_id=piece_id,
+        )
+
+        return response
 
     # TODO: return piece and other info
     async def retrieve(self, synapse: storage_subnet.protocol.Retrieve):
