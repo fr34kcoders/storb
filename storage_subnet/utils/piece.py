@@ -12,8 +12,8 @@ from storage_subnet.constants import (
     MIN_PIECE_SIZE,
     PIECE_LENGTH_OFFSET,
     PIECE_LENGTH_SCALING,
-    RS_DATA_SIZE,
-    RS_PARITY_SIZE,
+    EC_DATA_SIZE,
+    EC_PARITY_SIZE,
 )
 
 
@@ -56,8 +56,8 @@ def piece_hash(data: bytes) -> str:
 def split_file(
     file: UploadFile,
     piece_size: int,
-    data_pieces: int = RS_DATA_SIZE,
-    parity_pieces: int = RS_PARITY_SIZE,
+    data_pieces: int = EC_DATA_SIZE,
+    parity_pieces: int = EC_PARITY_SIZE,
 ) -> Generator[tuple[str, bytes, int], None, None]:
     """
     Stream data and parity pieces as they are generated.

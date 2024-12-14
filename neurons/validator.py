@@ -33,8 +33,8 @@ import storage_subnet.validator.db as db
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import (
     MAX_UPLOAD_SIZE,
-    RS_DATA_SIZE,
-    RS_PARITY_SIZE,
+    EC_DATA_SIZE,
+    EC_PARITY_SIZE,
     LogColor,
 )
 from storage_subnet.protocol import MetadataResponse, StoreResponse
@@ -162,8 +162,8 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         pieces = []
 
         # Use constants for data/parity pieces
-        data_pieces = RS_DATA_SIZE
-        parity_pieces = RS_PARITY_SIZE
+        data_pieces = EC_DATA_SIZE
+        parity_pieces = EC_PARITY_SIZE
 
         timestamp = str(datetime.now(UTC).timestamp())
 
