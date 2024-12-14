@@ -43,13 +43,6 @@ class Miner(BaseMinerNeuron):
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
 
-        bt.logging.info("Attaching store axon")
-        self.axon.attach(forward_fn=self.store)
-        bt.logging.info("Attached!")
-        bt.logging.info("Attaching retrieve axon")
-        self.axon.attach(forward_fn=self.get_piece)
-        bt.logging.info("Attached!")
-
         self.object_store = ObjectStore()
 
     async def forward(self, synapse: bt.Synapse) -> None:
@@ -71,7 +64,7 @@ class Miner(BaseMinerNeuron):
             f"ptype: {synapse.ptype} | piece preview: {decoded_piece[:10]} | hash: {piece_id} | pad len: {synapse.pad_len}"
         )
 
-        self.object_store.write(piece_id, decoded_piece)
+        await self.object_store.write(piece_id, decoded_piece)
 
         response = storage_subnet.protocol.Store(
             ptype=synapse.ptype,
@@ -93,7 +86,7 @@ class Miner(BaseMinerNeuron):
         bt.logging.info("Retrieving piece...")
         bt.logging.debug(f"piece id to retrieve: {synapse.piece_id}")
 
-        contents = self.object_store.read(synapse.piece_id)
+        contents = await self.object_store.read(synapse.piece_id)
         b64_encoded_piece = base64.b64encode(contents)
         b64_encoded_piece = b64_encoded_piece.decode("utf-8")
         response = storage_subnet.protocol.Retrieve(

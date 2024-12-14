@@ -99,11 +99,12 @@ class BaseMinerNeuron(BaseNeuron):
         self.sync()
 
         # attach to axon
+
         bt.logging.info("Attaching store axon")
         self.axon.attach(forward_fn=self.store)
         bt.logging.info("Attached!")
         bt.logging.info("Attaching retrieve axon")
-        self.axon.attach(forward_fn=self.retrieve)
+        self.axon.attach(forward_fn=self.get_piece)
         bt.logging.info("Attached!")
 
         # Serve passes the axon information to the network + netuid we are hosting on.

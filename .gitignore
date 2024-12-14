@@ -2,6 +2,9 @@
 .ruff_cache
 .vscode
 
+# store
+object_store
+
 # db
 validator_database.db
 
