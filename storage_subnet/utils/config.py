@@ -273,7 +273,28 @@ def add_validator_args(cls, parser):
         "--api_port",
         type=int,
         help="api port",
-        default=6969,
+        default=6960,
+    )
+
+    parser.add_argument(
+        "--tracker_dht_port",
+        type=int,
+        help="Port for the Tracker DHT.",
+        default=6942,
+    )
+
+    parser.add_argument(
+        "--tracker_dht_bootstrap_ip",
+        type=str,
+        help="Bootstrap node IP for the Tracker DHT.",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--tracker_dht_bootstrap_port",
+        type=int,
+        help="Bootstrap node port for the Tracker DHT.",
+        default=None,
     )
 
     parser.add_argument(

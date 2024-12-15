@@ -19,6 +19,8 @@
 import asyncio
 import base64
 import hashlib
+import logging
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -38,6 +40,7 @@ from storage_subnet.constants import (
     NUM_UIDS_QUERY,
     LogColor,
 )
+from storage_subnet.dht.tracker_dht import TrackerDHT
 from storage_subnet.protocol import (
     MetadataResponse,
     MetadataSynapse,
@@ -69,7 +72,22 @@ class Validator(BaseValidatorNeuron):
         super(Validator, self).__init__(config=config)
         bt.logging.info("load_state()")
         self.load_state()
-
+        dht_port = (
+            self.config.tracker_dht_port
+            if hasattr(self.config, "tracker_dht_port")
+            else 6942
+        )
+        self.tracker_dht = TrackerDHT(dht_port)
+        # TODO: Rework this before merging into main
+        # Kademlia logging setup
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        handler.setFormatter(formatter)
+        k_log = logging.getLogger("kademlia")
+        k_log.addHandler(handler)
+        k_log.setLevel(logging.DEBUG)
         # start the axon server
         self.axon.start()
 
@@ -88,11 +106,57 @@ class Validator(BaseValidatorNeuron):
         # TODO(developer): Rewrite this function based on your protocol definition.
         return await forward(self)
 
+    # TODO: rewrite this DHT load function
+    async def start(self):
+        # Perform asynchronous initialization
+        try:
+            if self.config.tracker_dht_bootstrap_ip:
+                bt.logging.info("Starting tracker DHT with bootstrapping")
+                bootstrap_node_ip = (
+                    self.config.tracker_dht_bootstrap_ip
+                    if hasattr(self.config, "tracker_dht_bootstrap_ip")
+                    else None
+                )
+                bootstrap_node_port = (
+                    self.config.tracker_dht_bootstrap_port
+                    if hasattr(self.config, "tracker_dht_bootstrap_port")
+                    else None
+                )
+                await self.tracker_dht.start(
+                    bootstrap_node_ip=bootstrap_node_ip,
+                    bootstrap_node_port=bootstrap_node_port,
+                )
+            else:
+                bt.logging.info("Starting tracker DHT without bootstrapping")
+                await self.tracker_dht.start()
+                bt.logging.info(
+                    f"Started tracker DHT on port {self.config.tracker_dht_port}"
+                )
+            try:
+                bt.logging.info("Checking DHT status")
+            except Exception as e:
+                bt.logging.error(f"Tracker DHT is not ready: {e}")
+                raise RuntimeError("Tracker DHT failed readiness check.")
+
+        except Exception as e:
+            bt.logging.error(f"Failed to start tracker DHT: {e}")
+            raise
+
 
 core_validator = None
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.tracker_DHT = core_validator.tracker_dht
+    try:
+        yield
+    finally:
+        await core_validator.tracker_dht.stop()
+
+
 # API setup
-app = FastAPI(debug=False)
+app = FastAPI(debug=False, lifespan=lifespan)
 
 
 # logging middleware
@@ -125,6 +189,10 @@ async def vali() -> str:
 
 @app.get("/metadata/", response_model=MetadataResponse)
 async def obtain_metadata(infohash: str) -> MetadataResponse:
+    # Remove this before merging into main
+    # tracker_dht: TrackerDHT = req.app.state.tracker_DHT
+    # # Retrieve metadata from the dht
+    # value = await tracker_dht.get_tracker_entry(infohash)
     try:
         async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
             metadata = await db.get_metadata(conn, infohash)
@@ -145,7 +213,8 @@ async def obtain_metadata(infohash: str) -> MetadataResponse:
 
 
 @app.post("/store/", response_model=StoreResponse)
-async def upload_file(file: UploadFile) -> StoreResponse:
+async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
+    tracker_dht: TrackerDHT = req.app.state.tracker_DHT
     try:
         if not file.filename:
             raise HTTPException(
@@ -273,6 +342,26 @@ async def upload_file(file: UploadFile) -> StoreResponse:
                 detail=f"Unexpected database error: {e}",
             )
 
+        # Remove this before merging into main
+        # Store the pieces in the DHT
+        try:
+            await tracker_dht.store_tracker_entry(
+                infohash,
+                TrackerDHTValue(
+                    validator_id=123,
+                    filename=filename,
+                    length=filesize,
+                    piece_length=piece_size,
+                    piece_count=len(pieces),
+                    parity_count=2,
+                ),
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to store tracker entry in DHT: {e}",
+            )
+
         bt.logging.info(f"Uploaded file with infohash: {infohash}")
         return StoreResponse(infohash=infohash)
 
@@ -361,7 +450,7 @@ async def run_uvicorn_server() -> None:
 async def main() -> None:
     global core_validator  # noqa
     core_validator = Validator()
-
+    await core_validator.start()
     if not (core_validator.config.synthetic or core_validator.config.organic):
         bt.logging.error(
             "You did not select a validator type to run! Ensure you select to run either a synthetic or organic validator. Shutting down..."
