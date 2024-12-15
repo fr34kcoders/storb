@@ -22,7 +22,7 @@ import subprocess
 
 import bittensor as bt
 
-from storage_subnet.constants import MAX_QUERY_BATCH_SIZE
+from storage_subnet.constants import DB_DIR, MAX_QUERY_BATCH_SIZE, STORE_DIR
 
 from .logging import setup_events_logger
 
@@ -171,6 +171,13 @@ def add_miner_args(cls, parser):
         help="Wandb entity to log to.",
     )
 
+    parser.add_argument(
+        "--store_dir",
+        type=str,
+        default=STORE_DIR,
+        help="directory for object store",
+    )
+
 
 def add_validator_args(cls, parser):
     """Add validator specific arguments to the parser."""
@@ -274,6 +281,13 @@ def add_validator_args(cls, parser):
         type=int,
         help="max store query batch size",
         default=MAX_QUERY_BATCH_SIZE,
+    )
+
+    parser.add_argument(
+        "--db_dir",
+        type=str,
+        help="directory of validator database",
+        default=DB_DIR,
     )
 
 

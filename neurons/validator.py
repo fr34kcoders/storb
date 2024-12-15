@@ -126,7 +126,7 @@ async def vali() -> str:
 @app.get("/metadata/", response_model=MetadataResponse)
 async def obtain_metadata(infohash: str) -> MetadataResponse:
     try:
-        async with db.get_db_connection() as conn:
+        async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
             metadata = await db.get_metadata(conn, infohash)
 
             if metadata is None:
@@ -255,7 +255,9 @@ async def upload_file(file: UploadFile) -> StoreResponse:
 
         # Store infohash and metadata in the database
         try:
-            async with db.get_db_connection() as conn:
+            async with db.get_db_connection(
+                db_dir=core_validator.config.db_dir
+            ) as conn:
                 await db.store_infohash_piece_ids(conn, infohash, piece_hashes)
                 await db.store_metadata(
                     conn, infohash, filename, timestamp, piece_size, filesize
@@ -294,7 +296,7 @@ async def retrieve_file(infohash: str):
     # check local pieces from infohash
 
     piece_ids = None
-    async with db.get_db_connection() as conn:
+    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
         piece_ids = await db.get_pieces_from_infohash(conn, infohash)
 
     if piece_ids is not None:

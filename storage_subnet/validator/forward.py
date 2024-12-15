@@ -18,14 +18,10 @@
 # DEALINGS IN THE SOFTWARE.
 
 import asyncio
-import time
 
 import bittensor as bt
 
 from storage_subnet.constants import QUERY_TIMEOUT
-from storage_subnet.protocol import Dummy
-from storage_subnet.utils.uids import get_random_uids
-from storage_subnet.validator.reward import get_rewards
 
 
 async def forward(self):

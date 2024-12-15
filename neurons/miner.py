@@ -1,7 +1,6 @@
 # The MIT License (MIT)
 # Copyright (c) 2023 Yuma Rao
-# TODO(developer): Set your name
-# Copyright (c) 2023 <your name>
+# Copyright (c) 2024 𝓯𝓻𝓮𝓪𝓴𝓬𝓸𝓭𝓮𝓻𝓼
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the “Software”), to deal in the Software without restriction, including without limitation
@@ -29,6 +28,7 @@ import storage_subnet
 # import base miner class which takes care of most of the boilerplate
 from storage_subnet.base.miner import BaseMinerNeuron
 from storage_subnet.utils.piece import piece_hash
+from storage_subnet.utils.store import ObjectStore
 
 
 class Miner(BaseMinerNeuron):
@@ -43,12 +43,7 @@ class Miner(BaseMinerNeuron):
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
 
-        bt.logging.info("Attaching store axon")
-        self.axon.attach(forward_fn=self.store)
-        bt.logging.info("Attached!")
-        bt.logging.info("Attaching retrieve axon")
-        self.axon.attach(forward_fn=self.retrieve)
-        bt.logging.info("Attached!")
+        self.object_store = ObjectStore(store_dir=self.config.store_dir)
 
     async def forward(self, synapse: bt.Synapse) -> None:
         return None
@@ -69,6 +64,8 @@ class Miner(BaseMinerNeuron):
             f"ptype: {synapse.ptype} | piece preview: {decoded_piece[:10]} | hash: {piece_id} | pad len: {synapse.pad_len}"
         )
 
+        await self.object_store.write(piece_id, decoded_piece)
+
         response = storage_subnet.protocol.Store(
             ptype=synapse.ptype,
             pad_len=synapse.pad_len,
@@ -77,8 +74,9 @@ class Miner(BaseMinerNeuron):
 
         return response
 
-    # TODO: return piece and other info
-    async def retrieve(self, synapse: storage_subnet.protocol.Retrieve):
+    async def get_piece(
+        self, synapse: storage_subnet.protocol.Retrieve
+    ) -> storage_subnet.protocol.Retrieve:
         """
         Returns piece from miner storage
 
@@ -87,6 +85,15 @@ class Miner(BaseMinerNeuron):
         """
         bt.logging.info("Retrieving piece...")
         bt.logging.debug(f"piece id to retrieve: {synapse.piece_id}")
+
+        contents = await self.object_store.read(synapse.piece_id)
+        b64_encoded_piece = base64.b64encode(contents)
+        b64_encoded_piece = b64_encoded_piece.decode("utf-8")
+        response = storage_subnet.protocol.Retrieve(
+            piece_id=synapse.piece_id, piece=b64_encoded_piece
+        )
+
+        return response
 
     async def blacklist(
         self, synapse: storage_subnet.protocol.Dummy

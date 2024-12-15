@@ -8,12 +8,12 @@ from fastapi import UploadFile
 from zfec.easyfec import Decoder, Encoder
 
 from storage_subnet.constants import (
+    EC_DATA_SIZE,
+    EC_PARITY_SIZE,
     MAX_PIECE_SIZE,
     MIN_PIECE_SIZE,
     PIECE_LENGTH_OFFSET,
     PIECE_LENGTH_SCALING,
-    EC_DATA_SIZE,
-    EC_PARITY_SIZE,
 )
 
 

@@ -1,5 +1,6 @@
 # The MIT License (MIT)
 # Copyright (c) 2023 Yuma Rao
+# Copyright (c) 2024 𝓯𝓻𝓮𝓪𝓴𝓬𝓸𝓭𝓮𝓻𝓼
 
 # Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
 # documentation files (the “Software”), to deal in the Software without restriction, including without limitation
@@ -15,12 +16,12 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
-from abc import abstractmethod
 import argparse
 import asyncio
 import threading
 import time
 import traceback
+from abc import abstractmethod
 from typing import Union
 
 import bittensor as bt
@@ -69,7 +70,7 @@ class BaseMinerNeuron(BaseNeuron):
     async def store(self, synapse: bt.Synapse) -> bt.Synapse: ...
 
     @abstractmethod
-    async def retrieve(self, synapse: bt.Synapse) -> bt.Synapse: ...
+    async def get_piece(self, synapse: bt.Synapse) -> bt.Synapse: ...
 
     def run(self):
         """
@@ -98,11 +99,12 @@ class BaseMinerNeuron(BaseNeuron):
         self.sync()
 
         # attach to axon
+
         bt.logging.info("Attaching store axon")
         self.axon.attach(forward_fn=self.store)
         bt.logging.info("Attached!")
         bt.logging.info("Attaching retrieve axon")
-        self.axon.attach(forward_fn=self.retrieve)
+        self.axon.attach(forward_fn=self.get_piece)
         bt.logging.info("Attached!")
 
         # Serve passes the axon information to the network + netuid we are hosting on.
