@@ -18,6 +18,12 @@ MAX_UPLOAD_SIZE = 1 * 1024 * 1024 * 1024 * 1024  # 1 TiB
 EC_DATA_SIZE = 4
 EC_PARITY_SIZE = 2
 
+# default object store dir
+STORE_DIR = "object_store"
+
+# default validator database dir
+DB_DIR = "validator_database.db"
+
 
 class LogColor(StrEnum):
     RESET = "\033[0m"

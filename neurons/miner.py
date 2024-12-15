@@ -43,7 +43,7 @@ class Miner(BaseMinerNeuron):
     def __init__(self, config=None):
         super(Miner, self).__init__(config=config)
 
-        self.object_store = ObjectStore()
+        self.object_store = ObjectStore(store_dir=self.config.store_dir)
 
     async def forward(self, synapse: bt.Synapse) -> None:
         return None

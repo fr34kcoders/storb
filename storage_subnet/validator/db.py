@@ -15,7 +15,7 @@ INFOHASH_PIECE_IDS = "infohash_piece_ids"
 
 
 @asynccontextmanager
-async def get_db_connection(db_dir: str = DB_DIR, uri: bool = False):  # noqa: ANN201
+async def get_db_connection(db_dir: str, uri: bool = False):  # noqa: ANN201
     conn = await aiosqlite.connect(db_dir, uri=uri)
     conn.row_factory = aiosqlite.Row
     await conn.execute("PRAGMA foreign_keys = ON")  # Enable foreign key constraints

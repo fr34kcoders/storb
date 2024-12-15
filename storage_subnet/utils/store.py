@@ -6,11 +6,9 @@ from pathlib import Path
 
 import aiofiles
 
-STORE_DIR = "object_store"
-
 
 class ObjectStore:
-    def __init__(self, store_dir: str = STORE_DIR):
+    def __init__(self, store_dir: str):
         """
         Initialise the object store.
 
