@@ -657,6 +657,18 @@ wheels = [
 ]
 
 [[package]]
+name = "kademlia"
+version = "2.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "rpcudp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/85/5e54903d20e3ff7aa7a6a1d7be289b254a67a18cc7f94b7cdfeacf10af69/kademlia-2.2.2.tar.gz", hash = "sha256:22928c2e92544c7223ed5905c42bfea291336851beec7de436af4ca41ac0d8eb", size = 16908 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/11/1d/8d151cc631bd6e1590aab5e5f5c4643ebe43db51dc70121ea0819af94077/kademlia-2.2.2-py3-none-any.whl", hash = "sha256:47696d2e75d60d71eda47fe2e21a96312b0a05f850f9a6910073b5cd79494d0e", size = 20353 },
+]
+
+[[package]]
 name = "levenshtein"
 version = "0.26.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1296,6 +1308,15 @@ wheels = [
 ]
 
 [[package]]
+name = "rpcudp"
+version = "5.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "u-msgpack-python" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/36/472469be162eabf8b112c87a0e3661b057cab6d54345d3898a3713fe911e/rpcudp-5.0.0.tar.gz", hash = "sha256:fa4a7cbdfe25101de9d71b89cbaeaddc02b9db3457ae74484855fe044b5e173a", size = 6260 }
+
+[[package]]
 name = "ruff"
 version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1400,6 +1421,7 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "bittensor" },
     { name = "fastapi" },
+    { name = "kademlia" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "pytest" },
@@ -1422,6 +1444,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "bittensor", specifier = "==8.4.5" },
     { name = "fastapi", specifier = ">=0.110.3" },
+    { name = "kademlia", specifier = ">=2.2.2" },
     { name = "numpy", specifier = "==2.0.2" },
     { name = "pydantic", specifier = ">=2.10.3" },
     { name = "pytest", specifier = ">=8.3.4" },
@@ -1513,6 +1536,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/df/db/f35a00659bc03fec321ba8bce9420de607a1d37f8342eee1863174c69557/typing_extensions-4.12.2.tar.gz", hash = "sha256:1a7ead55c7e559dd4dee8856e3a88b41225abfe1ce8df57b7c13915fe121ffb8", size = 85321 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/26/9f/ad63fc0248c5379346306f8668cda6e2e2e9c95e01216d2b8ffd9ff037d0/typing_extensions-4.12.2-py3-none-any.whl", hash = "sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d", size = 37438 },
+]
+
+[[package]]
+name = "u-msgpack-python"
+version = "2.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/36/9d/a40411a475e7d4838994b7f6bcc6bfca9acc5b119ce3a7503608c4428b49/u-msgpack-python-2.8.0.tar.gz", hash = "sha256:b801a83d6ed75e6df41e44518b4f2a9c221dc2da4bcd5380e3a0feda520bc61a", size = 18167 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/5e/512aeb40fd819f4660d00f96f5c7371ee36fc8c6b605128c5ee59e0b28c6/u_msgpack_python-2.8.0-py2.py3-none-any.whl", hash = "sha256:1d853d33e78b72c4228a2025b4db28cda81214076e5b0422ed0ae1b1b2bb586a", size = 10590 },
 ]
 
 [[package]]
