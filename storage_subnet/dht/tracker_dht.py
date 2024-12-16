@@ -1,67 +1,52 @@
 import asyncio
-import json
 from datetime import datetime
+from typing import Union
 
 import bittensor as bt
+from pydantic import BaseModel, Field, field_validator
 
 from storage_subnet.dht.base_dht import BaseDHT
 
 
-class TrackerDHTValue:
-    def __init__(
-        self,
-        validator_id: int,
-        filename: str,
-        length: int,
-        piece_length: int,
-        piece_count: int,
-        parity_count: int,
-    ):
-        if length <= 0:
-            raise ValueError("File length must be greater than 0.")
-        if piece_length <= 0:
-            raise ValueError("Piece length must be greater than 0.")
-        if piece_count <= 0:
-            raise ValueError("Piece count must be greater than 0.")
-        if parity_count < 0:
-            raise ValueError("Parity count cannot be negative.")
+class TrackerDHTValue(BaseModel):
+    validator_id: int
+    filename: str
+    length: int = Field(..., gt=0, description="File length must be greater than 0.")
+    piece_length: int = Field(
+        ..., gt=0, description="Piece length must be greater than 0."
+    )
+    piece_count: int = Field(
+        ..., gt=0, description="Piece count must be greater than 0."
+    )
+    parity_count: int = Field(..., ge=0, description="Parity count cannot be negative.")
+    creation_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    updated_timestamp: Union[str, None] = None
 
-        self.validator_id = validator_id
-        self.filename = filename
-        self.creation_timestamp = datetime.now().isoformat()
-        self.updated_timestamp = self.creation_timestamp
-        self.piece_length = piece_length
-        self.piece_count = piece_count
-        self.parity_count = parity_count
-        self.length = length
+    @field_validator("filename")
+    @classmethod
+    def validate_filename(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Filename cannot be empty.")
+        return value
 
-    def to_dict(self) -> dict[str, str | int | list[str]]:
-        return {
-            "validator_id": self.validator_id,
-            "filename": self.filename,
-            "creation_timestamp": self.creation_timestamp,
-            "updated_timestamp": self.updated_timestamp,
-            "piece_length": self.piece_length,
-            "piece_count": self.piece_count,
-            "parity_count": self.parity_count,
-            "length": self.length,
-        }
+    def to_dict(self) -> dict:
+        return self.model_dump()
 
     def update_timestamp(self):
         self.updated_timestamp = datetime.now().isoformat()
 
 
 class TrackerDHT(BaseDHT):
+    def __init__(self, port: int = 6942, bootstrap_node: tuple[str, int] = None):
+        super().__init__(port=port, startup_timeout=10)
+        self.bootstrap_node = bootstrap_node
+
     async def store_tracker_entry(self, infohash: str, value: TrackerDHTValue) -> None:
         """
         Store a tracker entry in the DHT.
-
-        Args:
-            infohash (str): The unique identifier for the file.
-            value (TrackerDHTValue): The tracker value to store.
         """
         bt.logging.info(f"Storing tracker entry for infohash: {infohash}")
-        ser_value = json.dumps(value.to_dict())
+        ser_value = value.model_dump_json()
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
@@ -69,24 +54,16 @@ class TrackerDHT(BaseDHT):
                 self.server.set(f"tracker:{infohash}", ser_value),
                 self.loop,
             )
-            res = future.result(timeout=5)  # Optional timeout
+            res = future.result(timeout=5)
             if not res:
                 raise RuntimeError(f"Failed to store tracker entry for {infohash}")
             bt.logging.info(f"Successfully stored tracker entry for {infohash}")
         except Exception as e:
             raise RuntimeError(f"Failed to store tracker entry for {infohash}: {e}")
 
-    async def get_tracker_entry(
-        self, infohash: str
-    ) -> dict[str, str | int | list[str]]:
+    async def get_tracker_entry(self, infohash: str) -> TrackerDHTValue:
         """
         Retrieve a tracker entry from the DHT.
-
-        Args:
-            infohash (str): The unique identifier for the file.
-
-        Returns:
-            Dict: The tracker value associated with the infohash.
         """
         bt.logging.info(f"Retrieving tracker entry for infohash: {infohash}")
         try:
@@ -95,10 +72,10 @@ class TrackerDHT(BaseDHT):
             future = asyncio.run_coroutine_threadsafe(
                 self.server.get(f"tracker:{infohash}"), self.loop
             )
-            ser_value = future.result(timeout=5)  # Optional timeout
+            ser_value = future.result(timeout=5)
             if ser_value is None:
                 raise RuntimeError(f"Failed to retrieve tracker entry for {infohash}")
-            value = json.loads(ser_value)
+            value = TrackerDHTValue.model_validate_json(ser_value)
             bt.logging.info(f"Successfully retrieved tracker entry for {infohash}")
             return value
         except Exception as e:
