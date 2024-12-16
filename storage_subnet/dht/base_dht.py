@@ -4,8 +4,11 @@ import threading
 import bittensor as bt
 from kademlia.network import Server
 
+from storage_subnet.dht.piece_dht import PieceDHTValue
+from storage_subnet.dht.tracker_dht import TrackerDHTValue
 
-class BaseDHT:
+
+class DHT:
     def __init__(self, port: int = 6942, startup_timeout: int = 5):
         self.server: Server = Server()
         self.port: int = port
@@ -109,6 +112,88 @@ class BaseDHT:
 
         self.loop.close()
         bt.logging.info("DHT Server stopped and event loop closed.")
+
+    # Tracker DHT methods
+    async def store_tracker_entry(self, infohash: str, value: TrackerDHTValue) -> None:
+        """
+        Store a tracker entry in the DHT.
+        """
+        bt.logging.info(f"Storing tracker entry for infohash: {infohash}")
+        ser_value = value.model_dump_json()
+        try:
+            if self.server.protocol.router is None:
+                raise RuntimeError("Event loop is not set yet!")
+            future = asyncio.run_coroutine_threadsafe(
+                self.server.set(f"tracker:{infohash}", ser_value),
+                self.loop,
+            )
+            res = future.result(timeout=5)
+            if not res:
+                raise RuntimeError(f"Failed to store tracker entry for {infohash}")
+            bt.logging.info(f"Successfully stored tracker entry for {infohash}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to store tracker entry for {infohash}: {e}")
+
+    async def get_tracker_entry(self, infohash: str) -> TrackerDHTValue:
+        """
+        Retrieve a tracker entry from the DHT.
+        """
+        bt.logging.info(f"Retrieving tracker entry for infohash: {infohash}")
+        try:
+            if self.server.protocol.router is None:
+                raise RuntimeError("Event loop is not set yet!")
+            future = asyncio.run_coroutine_threadsafe(
+                self.server.get(f"tracker:{infohash}"), self.loop
+            )
+            ser_value = future.result(timeout=5)
+            if not ser_value:
+                raise RuntimeError(f"Failed to retrieve tracker entry for {infohash}")
+            value = TrackerDHTValue.model_validate_json(ser_value)
+            bt.logging.info(f"Successfully retrieved tracker entry for {infohash}")
+            return value
+        except Exception as e:
+            raise RuntimeError(f"Failed to retrieve tracker entry for {infohash}: {e}")
+
+    # Piece DHT methods
+    async def store_piece_entry(self, piece_id: str, value: PieceDHTValue) -> None:
+        """
+        Store a piece entry in the DHT.
+        """
+        bt.logging.info(f"Storing piece entry for piece_id: {piece_id}")
+        ser_value = value.model_dump_json()
+        try:
+            if self.server.protocol.router is None:
+                raise RuntimeError("Event loop is not set yet!")
+            future = asyncio.run_coroutine_threadsafe(
+                self.server.set(f"piece:{piece_id}", ser_value),
+                self.loop,
+            )
+            res = future.result(timeout=5)
+            if not res:
+                raise RuntimeError(f"Failed to store piece entry for {piece_id}")
+            bt.logging.info(f"Successfully stored piece entry for {piece_id}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to store piece entry for {piece_id}: {e}")
+
+    async def get_piece_entry(self, piece_id: str) -> PieceDHTValue:
+        """
+        Retrieve a piece entry from the DHT.
+        """
+        bt.logging.info(f"Retrieving piece entry for piece_id: {piece_id}")
+        try:
+            if self.server.protocol.router is None:
+                raise RuntimeError("Event loop is not set yet!")
+            future = asyncio.run_coroutine_threadsafe(
+                self.server.get(f"piece:{piece_id}"), self.loop
+            )
+            ser_value = future.result(timeout=5)
+            if ser_value is None:
+                raise RuntimeError(f"Failed to retrieve piece entry for {piece_id}")
+            value = PieceDHTValue.model_validate_json(ser_value)
+            bt.logging.info(f"Successfully retrieved piece entry for {piece_id}")
+            return value
+        except Exception as e:
+            raise RuntimeError(f"Failed to retrieve piece entry for {piece_id}: {e}")
 
     def __enter__(self):
         asyncio.run(self.start())

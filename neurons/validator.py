@@ -28,20 +28,26 @@ import aiosqlite
 import bittensor as bt
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
-from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
+from starlette.status import (
+    HTTP_400_BAD_REQUEST,
+    HTTP_404_NOT_FOUND,
+    HTTP_500_INTERNAL_SERVER_ERROR,
+)
 
 import storage_subnet.validator.db as db
 
 # import base validator class which takes care of most of the boilerplate
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import (
+    DHT_PORT,
     EC_DATA_SIZE,
     EC_PARITY_SIZE,
     MAX_UPLOAD_SIZE,
     NUM_UIDS_QUERY,
     LogColor,
 )
-from storage_subnet.dht.tracker_dht import TrackerDHT, TrackerDHTValue
+from storage_subnet.dht.base_dht import DHT
+from storage_subnet.dht.tracker_dht import TrackerDHTValue
 from storage_subnet.protocol import (
     MetadataResponse,
     MetadataSynapse,
@@ -57,7 +63,6 @@ from storage_subnet.utils.logging import (
 from storage_subnet.utils.piece import (
     piece_hash,
     piece_length,
-    reconstruct_file,
     split_file,
 )
 from storage_subnet.utils.uids import get_random_uids
@@ -79,12 +84,9 @@ class Validator(BaseValidatorNeuron):
         bt.logging.info("load_state()")
         self.load_state()
         dht_port = (
-            self.config.tracker_dht_port
-            if hasattr(self.config, "tracker_dht_port")
-            else 6942
+            self.config.dht.port if hasattr(self.config, "dht.port") else DHT_PORT
         )
-        self.tracker_dht = TrackerDHT(dht_port)
-        # TODO: Rework this before merging into main
+        self.dht = DHT(dht_port)
         setup_rotating_logger(
             logger_name="kademlia",
             log_level=logging.DEBUG,
@@ -113,41 +115,33 @@ class Validator(BaseValidatorNeuron):
         # TODO(developer): Rewrite this function based on your protocol definition.
         return await forward(self)
 
-    # TODO: rewrite this DHT load function
-    async def start(self):
-        # Perform asynchronous initialization
+    async def start_dht(self) -> None:
+        """
+        Start the DHT server.
+        """
         try:
-            if self.config.tracker_dht_bootstrap_ip:
-                bt.logging.info("Starting tracker DHT with bootstrapping")
-                bootstrap_node_ip = (
-                    self.config.tracker_dht_bootstrap_ip
-                    if hasattr(self.config, "tracker_dht_bootstrap_ip")
-                    else None
-                )
-                bootstrap_node_port = (
-                    self.config.tracker_dht_bootstrap_port
-                    if hasattr(self.config, "tracker_dht_bootstrap_port")
-                    else None
-                )
-                await self.tracker_dht.start(
-                    bootstrap_node_ip=bootstrap_node_ip,
-                    bootstrap_node_port=bootstrap_node_port,
-                )
-            else:
-                bt.logging.info("Starting tracker DHT without bootstrapping")
-                await self.tracker_dht.start()
+            if self.config.dht.bootstrap.ip and self.config.dht.bootstrap.port:
                 bt.logging.info(
-                    f"Started tracker DHT on port {self.config.tracker_dht_port}"
+                    f"Starting DHT server on port {self.config.dht.port} with bootstrap node {self.config.dht.bootstrap.ip}:{self.config.dht.bootstrap.port}"
                 )
-            try:
-                bt.logging.info("Checking DHT status")
-            except Exception as e:
-                bt.logging.error(f"Tracker DHT is not ready: {e}")
-                raise RuntimeError("Tracker DHT failed readiness check.")
-
+                bootstrap_ip = (
+                    self.config.dht.bootstrap.ip
+                    if hasattr(self.config.dht.bootstrap, "dht.bootstrap.ip")
+                    else None
+                )
+                bootstrap_port = (
+                    self.config.dht.bootstrap.port
+                    if hasattr(self.config.dht.bootstrap, "dht.bootstrap.port")
+                    else None
+                )
+                await self.dht.start(bootstrap_ip, bootstrap_port)
+            else:
+                bt.logging.info(f"Starting DHT server on port {self.config.dht.port}")
+                await self.dht.start()
+                bt.logging.info(f"DHT server started on port {self.config.dht.port}")
         except Exception as e:
-            bt.logging.error(f"Failed to start tracker DHT: {e}")
-            raise
+            bt.logging.error(f"Failed to start DHT server: {e}")
+            raise RuntimeError("Failed to start DHT server") from e
 
 
 core_validator = None
@@ -155,11 +149,11 @@ core_validator = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.tracker_DHT = core_validator.tracker_dht
+    app.state.dht = core_validator.dht
     try:
         yield
     finally:
-        await core_validator.tracker_dht.stop()
+        await core_validator.dht.stop()
 
 
 # API setup
@@ -217,10 +211,10 @@ async def obtain_metadata(infohash: str) -> MetadataResponse:
 
 @app.get("/metadata/dht/", response_model=MetadataResponse)
 async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataResponse:
-    tracker_dht: TrackerDHT = request.app.state.tracker_DHT
+    dht: DHT = request.app.state.dht
     bt.logging.info(f"Retrieving metadata for infohash: {infohash}")
     try:
-        metadata = await tracker_dht.get_tracker_entry(infohash)
+        metadata = await dht.get_tracker_entry(infohash)
         return MetadataResponse(
             infohash=infohash,
             filename=metadata.filename,
@@ -230,6 +224,33 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+# TODO: move this into a helper function for retrieve_file endpoint
+@app.get("/miners/")
+async def get_miners_for_file(infohash: str, request: Request) -> list[int]:
+    dht: DHT = request.app.state.dht
+    # Get the pieces from local tracker db
+    piece_ids = await db.get_pieces_from_infohash(infohash)
+    if piece_ids is None:
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail="No pieces found for the given infohash",
+        )
+
+    miners = []
+    for piece_id in piece_ids:
+        try:
+            piece_metadata = await dht.get_piece_entry(piece_id)
+            miners.append(piece_metadata.miner_id)
+        except Exception as e:
+            bt.logging.error(f"Failed to get miner for piece_id {piece_id}: {e}")
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to get miner for piece_id {piece_id}: {e}",
+            )
+
+    return miners
 
 
 # Upload Helper Functions
@@ -296,7 +317,7 @@ async def process_pieces(
 
 
 async def store_in_dht(
-    tracker_dht: TrackerDHT,
+    dht: DHT,
     validator_id: int,
     infohash: str,
     filename: str,
@@ -305,7 +326,7 @@ async def store_in_dht(
     piece_count: int,
 ) -> None:
     try:
-        await tracker_dht.store_tracker_entry(
+        await dht.store_tracker_entry(
             infohash,
             TrackerDHTValue(
                 validator_id=validator_id,
@@ -325,7 +346,7 @@ async def store_in_dht(
 
 @app.post("/store/", response_model=StoreResponse)
 async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
-    tracker_dht: TrackerDHT = req.app.state.tracker_DHT
+    dht: DHT = req.app.state.dht
     validator_id = core_validator.uid
     try:
         if not file.filename:
@@ -379,19 +400,6 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
             filename, timestamp, piece_size, filesize, piece_hashes
         )
 
-        # TODO: Remove reconstruction from upload api before shipping
-        # Reconstruct the file from the pieces
-        reconstructed_data = reconstruct_file(pieces, data_pieces, parity_pieces)
-        reconstructed_hash = hashlib.sha256(reconstructed_data).hexdigest()
-
-        bt.logging.trace(f"reconstructed checksum: {reconstructed_hash}")
-
-        # Verify file integrity
-        if reconstructed_hash != og_checksum:
-            raise HTTPException(
-                status_code=HTTP_400_BAD_REQUEST, detail="File integrity check failed"
-            )
-
         # Store infohash and metadata in the database
         try:
             async with db.get_db_connection(
@@ -414,7 +422,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
 
         # Store metadata in the DHT
         await store_in_dht(
-            tracker_dht=tracker_dht,
+            dht=dht,
             validator_id=validator_id,
             infohash=infohash,
             filename=filename,
@@ -511,7 +519,7 @@ async def run_uvicorn_server() -> None:
 async def main() -> None:
     global core_validator  # noqa
     core_validator = Validator()
-    await core_validator.start()
+    await core_validator.start_dht()
     if not (core_validator.config.synthetic or core_validator.config.organic):
         bt.logging.error(
             "You did not select a validator type to run! Ensure you select to run either a synthetic or organic validator. Shutting down..."

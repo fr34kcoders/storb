@@ -30,3 +30,7 @@ class LogColor(StrEnum):
     GREEN = "\033[32m"
     BLUE = "\033[34m"
     BOLD = "\033[1m"
+
+
+# default dht port
+DHT_PORT = 6942
