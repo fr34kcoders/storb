@@ -391,7 +391,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)
         piece_hashes, _ = await process_pieces(
             piece_size=piece_size,
-            pieces=pieces_generator,
+            piece_generator=pieces_generator,
             uids=uids,
             core_validator=core_validator,
         )
@@ -431,7 +431,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
             filename=filename,
             filesize=filesize,
             piece_size=piece_size,
-            piece_count=len(pieces),
+            piece_count=len(piece_hashes),
         )
 
         bt.logging.info(f"Uploaded file with infohash: {infohash}")
