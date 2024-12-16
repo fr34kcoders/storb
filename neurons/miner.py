@@ -16,6 +16,7 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+import asyncio
 import base64
 import time
 import typing
@@ -36,6 +37,7 @@ from storage_subnet.utils import logging
 from storage_subnet.utils.logging import setup_event_logger, setup_rotating_logger
 from storage_subnet.utils.piece import piece_hash
 from storage_subnet.utils.store import ObjectStore
+import logging as pylog
 
 
 class Miner(BaseMinerNeuron):
@@ -57,7 +59,7 @@ class Miner(BaseMinerNeuron):
         self.dht = DHT(dht_port)
         setup_rotating_logger(
             logger_name="kademlia",
-            log_level=logging.DEBUG,
+            log_level=pylog.DEBUG,
             max_size=5 * 1024 * 1024,  # 5 MB
         )
 
@@ -250,10 +252,14 @@ class Miner(BaseMinerNeuron):
         return priority
 
 
-# This is the main function, which runs the miner.
-if __name__ == "__main__":
+async def main():
     with Miner() as miner:
-        miner.start_dht()
+        await miner.start_dht()
         while True:
             bt.logging.info(f"Miner running... {time.time()}")
-            time.sleep(5)
+            await asyncio.sleep(30)
+
+
+# This is the main function, which runs the miner.
+if __name__ == "__main__":
+    asyncio.run(main())

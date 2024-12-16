@@ -231,7 +231,11 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
 async def get_miners_for_file(infohash: str, request: Request) -> list[int]:
     dht: DHT = request.app.state.dht
     # Get the pieces from local tracker db
-    piece_ids = await db.get_pieces_from_infohash(infohash)
+    piece_ids = None
+    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
+        # TODO: erm we shouldn't need to access the array of piece ids like this?
+        # something might be wrong with get_pieces_from_infohash()
+        piece_ids = (await db.get_pieces_from_infohash(conn, infohash))["piece_ids"]
     if piece_ids is None:
         raise HTTPException(
             status_code=HTTP_404_NOT_FOUND,

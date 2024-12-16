@@ -2,6 +2,7 @@
 Provides utilities for accessing and managing the object store
 """
 
+import os
 from pathlib import Path
 
 import aiofiles
@@ -51,7 +52,12 @@ class ObjectStore:
             data (bytes): The piece data in bytes.
         """
 
-        path = self.path / piece_hash[0:2] / piece_hash[2:]
+        folder = self.path / piece_hash[0:2]
+
+        if not os.path.exists(folder):
+            os.makedirs(folder)
+
+        path = folder / piece_hash[2:]
 
         async with aiofiles.open(path, mode="wb") as f:
             await f.write(data)
