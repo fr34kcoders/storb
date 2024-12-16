@@ -73,7 +73,8 @@ class TrackerDHT(BaseDHT):
                 self.server.get(f"tracker:{infohash}"), self.loop
             )
             ser_value = future.result(timeout=5)
-            if ser_value is None:
+            bt.logging.info(f"Retrieved tracker entry for infohash: {ser_value}")
+            if not ser_value:
                 raise RuntimeError(f"Failed to retrieve tracker entry for {infohash}")
             value = TrackerDHTValue.model_validate_json(ser_value)
             bt.logging.info(f"Successfully retrieved tracker entry for {infohash}")

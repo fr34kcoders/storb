@@ -196,10 +196,6 @@ async def vali() -> str:
 
 @app.get("/metadata/", response_model=MetadataResponse)
 async def obtain_metadata(infohash: str) -> MetadataResponse:
-    # Remove this before merging into main
-    # tracker_dht: TrackerDHT = req.app.state.tracker_DHT
-    # # Retrieve metadata from the dht
-    # value = await tracker_dht.get_tracker_entry(infohash)
     try:
         async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
             metadata = await db.get_metadata(conn, infohash)
@@ -216,6 +212,23 @@ async def obtain_metadata(infohash: str) -> MetadataResponse:
 
     except Exception as e:
         # Catch any other unexpected errors
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+@app.get("/metadata/dht/", response_model=MetadataResponse)
+async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataResponse:
+    tracker_dht: TrackerDHT = request.app.state.tracker_DHT
+    bt.logging.info(f"Retrieving metadata for infohash: {infohash}")
+    try:
+        metadata = await tracker_dht.get_tracker_entry(infohash)
+        return MetadataResponse(
+            infohash=infohash,
+            filename=metadata.filename,
+            timestamp=metadata.creation_timestamp,
+            piece_length=metadata.piece_length,
+            length=metadata.length,
+        )
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
 
