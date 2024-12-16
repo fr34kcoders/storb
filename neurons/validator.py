@@ -23,6 +23,7 @@ import logging
 import logging.config
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Iterable
 
 import aiosqlite
 import bittensor as bt
@@ -259,7 +260,7 @@ async def get_miners_for_file(infohash: str, request: Request) -> list[int]:
 
 # Upload Helper Functions
 async def process_pieces(
-    pieces: list[tuple[str, bytes, int]],
+    piece_generator: Iterable[tuple[str, bytes, int]],
     piece_size: int,
     uids: list[str],
     core_validator: Validator,
@@ -269,7 +270,7 @@ async def process_pieces(
     to_query = []
     curr_batch_size = 0
 
-    for idx, (ptype, data, pad) in enumerate(pieces):
+    for idx, (ptype, data, pad) in enumerate(piece_generator):
         p_hash = piece_hash(data)
         piece_hashes.append(p_hash)
         processed_pieces.append((ptype, data, pad))
@@ -388,11 +389,9 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         bt.logging.info(f"uids to query: {uids}")
 
         pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)
-        pieces = list(pieces_generator)
-
-        piece_hashes, processed_pieces = await process_pieces(
+        piece_hashes, _ = await process_pieces(
             piece_size=piece_size,
-            pieces=pieces,
+            pieces=pieces_generator,
             uids=uids,
             core_validator=core_validator,
         )
