@@ -2,7 +2,6 @@
 Provides utilities for accessing and managing the object store
 """
 
-import os
 from pathlib import Path
 
 import aiofiles
@@ -52,11 +51,10 @@ class ObjectStore:
             piece_hash (str): Piece hash for the data.
             data (bytes): The piece data in bytes.
         """
-        bt.logging.debug(f"Writing piece {piece_hash} to store")
+        bt.logging.deb(f"Writing piece {piece_hash} to store")
         folder = self.path / piece_hash[0:2]
-
-        if not os.path.exists(folder):
-            os.makedirs(folder)
+        if not folder.exists():
+            folder.mkdir()
 
         path = folder / piece_hash[2:]
 

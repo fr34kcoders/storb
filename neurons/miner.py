@@ -61,11 +61,11 @@ class Miner(BaseMinerNeuron):
         setup_rotating_logger(
             logger_name="kademlia",
             log_level=pylog.DEBUG,
-            max_size=5 * 1024 * 1024,  # 5 MB
+            max_size=5 * 1024 * 1024,  # 5 MiB
         )
 
         setup_event_logger(
-            retention_size=5 * 1024 * 1024  # 5 MB
+            retention_size=5 * 1024 * 1024  # 5 MiB
         )
 
     async def forward(self, synapse: bt.Synapse) -> None:
@@ -117,7 +117,6 @@ class Miner(BaseMinerNeuron):
         )
 
         await self.object_store.write(piece_id, decoded_piece)
-        self.piece_count += 1
         await self.dht.store_piece_entry(
             piece_id,
             PieceDHTValue(
@@ -125,6 +124,7 @@ class Miner(BaseMinerNeuron):
                 piece_type=synapse.ptype,
             ),
         )
+        self.piece_count += 1
 
         response = storage_subnet.protocol.Store(
             ptype=synapse.ptype,

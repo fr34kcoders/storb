@@ -91,11 +91,11 @@ class Validator(BaseValidatorNeuron):
         setup_rotating_logger(
             logger_name="kademlia",
             log_level=logging.DEBUG,
-            max_size=5 * 1024 * 1024,  # 5 MB
+            max_size=5 * 1024 * 1024,  # 5 MiB
         )
 
         setup_event_logger(
-            retention_size=5 * 1024 * 1024  # 5 MB
+            retention_size=5 * 1024 * 1024  # 5 MiB
         )
 
         # start the axon server
@@ -265,6 +265,26 @@ async def process_pieces(
     uids: list[str],
     core_validator: Validator,
 ) -> tuple[list[str], list[tuple[str, bytes, int]]]:
+    """
+    Process pieces of data by generating their hashes, encoding them, and querying miners.
+
+    Args:
+        piece_generator (Iterable[tuple[str, bytes, int]]): An iterable of tuples where each tuple contains:
+            - ptype (str): The type of the piece.
+            - data (bytes): The data of the piece.
+            - pad (int): The padding length of the piece.
+        piece_size (int): The size of each piece in bytes.
+        uids (list[str]): A list of unique identifiers for the miners.
+        core_validator (Validator): The core validator instance used for querying miners.
+
+    Returns:
+        tuple[list[str], list[tuple[str, bytes, int]]]: A tuple containing:
+            - A list of piece hashes.
+            - A list of processed pieces, where each piece is a tuple containing:
+                - ptype (str): The type of the piece.
+                - data (bytes): The data of the piece.
+                - pad (int): The padding length of the piece.
+    """
     piece_hashes = []
     processed_pieces = []
     to_query = []
@@ -334,6 +354,21 @@ async def store_in_dht(
     piece_size: int,
     piece_count: int,
 ) -> None:
+    """
+    Asynchronously stores tracker entry information in a Distributed Hash Table (DHT).
+
+    Args:
+        dht (DHT): The DHT instance where the tracker entry will be stored.
+        validator_id (int): The ID of the validator.
+        infohash (str): The infohash of the file.
+        filename (str): The name of the file.
+        filesize (int): The size of the file in bytes.
+        piece_size (int): The size of each piece in bytes.
+        piece_count (int): The number of pieces the file is divided into.
+
+    Raises:
+        HTTPException: If storing the tracker entry in the DHT fails.
+    """
     try:
         await dht.store_tracker_entry(
             infohash,
