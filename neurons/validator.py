@@ -23,10 +23,12 @@ import logging
 import logging.config
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Iterable
+import queue
+from typing import Generator, Iterable
 
 import aiosqlite
 import bittensor as bt
+from fastapi.responses import StreamingResponse
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from starlette.status import (
@@ -49,8 +51,10 @@ from storage_subnet.constants import (
 from storage_subnet.dht.base_dht import DHT
 from storage_subnet.dht.tracker_dht import TrackerDHTValue
 from storage_subnet.protocol import (
+    GetMiners,
     MetadataResponse,
     MetadataSynapse,
+    Retrieve,
     Store,
     StoreResponse,
 )
@@ -66,7 +70,7 @@ from storage_subnet.utils.piece import (
     split_file,
 )
 from storage_subnet.utils.uids import get_random_uids
-from storage_subnet.validator import forward, query_multiple_miners
+from storage_subnet.validator import forward, query_miner, query_multiple_miners
 
 
 # Define the Validator class
@@ -102,6 +106,37 @@ class Validator(BaseValidatorNeuron):
 
     async def get_metadata(self, synapse: MetadataSynapse) -> MetadataResponse:
         return obtain_metadata(synapse.infohash)
+
+    async def get_miners_for_file(self, synapse: GetMiners) -> GetMiners:
+        # Get the pieces from local tracker db
+        infohash = synapse.infohash
+
+        piece_ids = None
+        async with db.get_db_connection(db_dir=self.config.db_dir) as conn:
+            # TODO: erm we shouldn't need to access the array of piece ids like this?
+            # something might be wrong with get_pieces_from_infohash()
+            piece_ids = (await db.get_pieces_from_infohash(conn, infohash))["piece_ids"]
+        if piece_ids is None:
+            raise HTTPException(
+                status_code=HTTP_404_NOT_FOUND,
+                detail="No pieces found for the given infohash",
+            )
+
+        miners = []
+        for piece_id in piece_ids:
+            try:
+                piece_metadata = await self.dht.get_piece_entry(piece_id)
+                miners.append(piece_metadata.miner_id)
+            except Exception as e:
+                bt.logging.error(f"Failed to get miner for piece_id {piece_id}: {e}")
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to get miner for piece_id {piece_id}: {e}",
+                )
+
+        response = GetMiners(infohash=infohash, piece_ids=piece_ids, miners=miners)
+
+        return response
 
     async def forward(self):
         """
@@ -224,37 +259,6 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
-
-
-# TODO: move this into a helper function for retrieve_file endpoint
-@app.get("/miners/")
-async def get_miners_for_file(infohash: str, request: Request) -> list[int]:
-    dht: DHT = request.app.state.dht
-    # Get the pieces from local tracker db
-    piece_ids = None
-    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
-        # TODO: erm we shouldn't need to access the array of piece ids like this?
-        # something might be wrong with get_pieces_from_infohash()
-        piece_ids = (await db.get_pieces_from_infohash(conn, infohash))["piece_ids"]
-    if piece_ids is None:
-        raise HTTPException(
-            status_code=HTTP_404_NOT_FOUND,
-            detail="No pieces found for the given infohash",
-        )
-
-    miners = []
-    for piece_id in piece_ids:
-        try:
-            piece_metadata = await dht.get_piece_entry(piece_id)
-            miners.append(piece_metadata.miner_id)
-        except Exception as e:
-            bt.logging.error(f"Failed to get miner for piece_id {piece_id}: {e}")
-            raise HTTPException(
-                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to get miner for piece_id {piece_id}: {e}",
-            )
-
-    return miners
 
 
 # Upload Helper Functions
@@ -494,46 +498,76 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
 # TODO: WIP
 @app.get("/retrieve/")
 async def retrieve_file(infohash: str):
-    # check local pieces from infohash
+    # get validator id from tracker dht given infohash
+    tracker_dht = await core_validator.dht.get_tracker_entry(infohash)
+    validator_to_ask = tracker_dht.validator_id
 
-    piece_ids = None
-    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
-        piece_ids = await db.get_pieces_from_infohash(conn, infohash)
-
-    if piece_ids is not None:
-        return "found locally"
-        # check integrity of file if found
-        # reassemble and return file
-
-    # if not in local db query other validators
-
-    # get validator uids
-    # vali_uids = await get_query_api_nodes(core_validator.dendrite, core_validator.metagraph)
-    active_uids = [
-        uid
-        for uid in range(core_validator.metagraph.n.item())
-        if core_validator.metagraph.axons[uid].is_serving
-    ]
-
-    responses = await core_validator.dendrite.forward(
-        # Send the query to selected miner axons in the network.
-        axons=[core_validator.metagraph.axons[uid] for uid in active_uids],
-        # Construct a dummy query. This simply contains a single integer.
-        synapse=MetadataSynapse(infohash=infohash),
-        # All responses have the deserialize function called on them before returning.
-        # You are encouraged to define your own deserialization function.
-        # deserialize=True,
-        deserialize=False,
+    # get the uids of the miners(s) that stores each respective piece by asking the validator
+    synapse = GetMiners(infohash=infohash)
+    _, response = await query_miner(
+        core_validator,
+        synapse=synapse,
+        uid=validator_to_ask,
     )
 
-    for response in responses:
-        print(response)
+    bt.logging.info(f"Response from validator {validator_to_ask}: {response}")
 
-    # if found, update local tracker db
+    piece_ids = response.piece_ids
+    miners = response.miners
 
-    # check integrity of file
+    # TODO: check if piece_ids and miners lengths are the same
+    # TODO: many of these can be moved around and placed into their own functions
 
-    # reassemble and return file
+    # get piece(s) from miner(s)
+    to_query = []
+    for idx, miner_uid in enumerate(miners):
+        piece_id = piece_ids[idx]
+        synapse = Retrieve(piece_id=piece_id)
+        to_query.append(
+            asyncio.create_task(
+                query_miner(
+                    self=core_validator,
+                    synapse=synapse,
+                    uid=miner_uid,
+                    deserialize=True,
+                )
+            )
+        )
+
+    responses: list[tuple[int, Retrieve]] = await asyncio.gather(*to_query)
+
+    # TODO: optimize the rest of this
+    # check integrity of file if found
+    for idx, uid_and_response in enumerate(responses):
+        _, response = uid_and_response
+        if response.piece_id != piece_ids[idx]:
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Piece ids don't not match!",
+            )
+
+    # stream the pieces as a file
+    buffer = queue.Queue()
+
+    # Function to add items to the buffer
+    async def fill_buffer():
+        for _, response in responses:
+            piece = base64.b64decode(response.piece.encode("utf-8"))
+            buffer.put(piece)  # Add to buffer
+        buffer.put(None)  # Signal end of stream by adding None
+
+    # Function to generate the stream
+    def stream_from_buffer() -> Generator[bytes, None, None]:
+        while True:
+            chunk = buffer.get()  # Block until data is available
+            if chunk is None:  # If None is received, end of the stream
+                break
+            yield chunk  # Yield the data chunk to the client
+
+    asyncio.create_task(fill_buffer())
+    return StreamingResponse(
+        stream_from_buffer(), media_type="application/octet-stream"
+    )
 
 
 # Async main loop for the validator

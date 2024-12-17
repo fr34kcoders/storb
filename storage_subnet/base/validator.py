@@ -92,6 +92,9 @@ class BaseValidatorNeuron(BaseNeuron):
     @abstractmethod
     async def get_metadata(self, synapse: bt.Synapse) -> bt.Synapse: ...
 
+    @abstractmethod
+    async def get_miners_for_file(self, synapse: bt.Synapse) -> bt.Synapse: ...
+
     def serve_axon(self):
         """Serve axon to enable external connections."""
 
@@ -99,8 +102,12 @@ class BaseValidatorNeuron(BaseNeuron):
         try:
             self.axon = bt.axon(wallet=self.wallet, config=self.config)
 
+            bt.logging.info("Attaching get_miners_for_file function to validator axon.")
+            self.axon.attach(forward_fn=self.get_miners_for_file)
+            bt.logging.info("Attached!")
             bt.logging.info("Attaching get_metadata function to validator axon.")
             self.axon.attach(forward_fn=self.get_metadata)
+            bt.logging.info("Attached!")
             bt.logging.info(f"Axon created: {self.axon}")
 
             try:
