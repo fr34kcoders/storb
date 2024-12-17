@@ -22,7 +22,7 @@ import subprocess
 
 import bittensor as bt
 
-from storage_subnet.constants import DB_DIR, MAX_QUERY_BATCH_SIZE, STORE_DIR
+from storage_subnet.constants import DB_DIR, MAX_QUERY_BATCH_SIZE, NUM_UIDS_QUERY, STORE_DIR
 
 from .logging import setup_event_logger
 
@@ -310,6 +310,13 @@ def add_validator_args(cls, parser):
         type=str,
         help="directory of validator database",
         default=DB_DIR,
+    )
+
+    parser.add_argument(
+        "--num_uids_query",
+        type=int,
+        help="number of uids to query per store request",
+        default=NUM_UIDS_QUERY,
     )
 
 
