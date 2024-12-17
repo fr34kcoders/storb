@@ -44,7 +44,6 @@ from storage_subnet.constants import (
     EC_DATA_SIZE,
     EC_PARITY_SIZE,
     MAX_UPLOAD_SIZE,
-    NUM_UIDS_QUERY,
     LogColor,
 )
 from storage_subnet.dht.base_dht import DHT
@@ -424,7 +423,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         timestamp = str(datetime.now(UTC).timestamp())
 
         # Generate and store all pieces
-        uids = get_random_uids(core_validator, k=NUM_UIDS_QUERY)
+        uids = get_random_uids(core_validator, k=core_validator.config.num_uids_query)
         bt.logging.info(f"uids to query: {uids}")
 
         pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)

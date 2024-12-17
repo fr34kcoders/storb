@@ -21,8 +21,6 @@ import asyncio
 
 import bittensor as bt
 
-from storage_subnet.constants import QUERY_TIMEOUT
-
 
 async def forward(self):
     """
@@ -48,7 +46,7 @@ async def query_miner(
     return uid, await self.dendrite.forward(
         axons=self.metagraph.axons[int(uid)],
         synapse=synapse,
-        timeout=QUERY_TIMEOUT,
+        timeout=self.config.query_timeout,
         deserialize=deserialize,
         streaming=False,
     )
