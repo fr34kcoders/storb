@@ -538,13 +538,19 @@ async def retrieve_file(infohash: str):
 
     # TODO: optimize the rest of this
     # check integrity of file if found
+    response_piece_ids = []
     for idx, uid_and_response in enumerate(responses):
         _, response = uid_and_response
-        if response.piece_id != piece_ids[idx]:
+        decoded_piece = base64.b64decode(response.piece.encode("utf-8"))
+        piece_id = piece_hash(decoded_piece)
+        if piece_id != piece_ids[idx]:
             raise HTTPException(
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Piece ids don't not match!",
             )
+        response_piece_ids.append(piece_id)
+
+    bt.logging.debug(f"tracker_dht: {tracker_dht}")
 
     # stream the pieces as a file
     buffer = queue.Queue()
