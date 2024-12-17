@@ -269,6 +269,7 @@ async def process_pieces(
     processed_pieces = []
     to_query = []
     curr_batch_size = 0
+    pieces_sent = 0
 
     for idx, (ptype, data, pad) in enumerate(piece_generator):
         p_hash = piece_hash(data)
@@ -291,6 +292,7 @@ async def process_pieces(
         )
         to_query.append(task)
         curr_batch_size += 1
+        pieces_sent += 1
 
         # Batch requests
         if curr_batch_size >= core_validator.config.query_batch_size:
@@ -317,6 +319,8 @@ async def process_pieces(
         for piece_batch in batch_responses:
             for uid, response in piece_batch:
                 bt.logging.debug(f"uid: {uid} response: {response.preview_no_piece()}")
+
+    bt.logging.debug(f"Sent {pieces_sent} pieces to miners")
 
     return piece_hashes, processed_pieces
 
@@ -402,7 +406,9 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         infohash, _ = generate_infohash(
             filename, timestamp, piece_size, filesize, piece_hashes
         )
-
+        # Put piece hashes in a set
+        piece_hash_set = set(piece_hashes)
+        bt.logging.debug(f"Generated pieces: {len(piece_hash_set)}")
         # Store infohash and metadata in the database
         try:
             async with db.get_db_connection(

@@ -18,6 +18,7 @@
 
 import asyncio
 import base64
+import logging as pylog
 import time
 import typing
 
@@ -33,11 +34,9 @@ from storage_subnet.constants import (
 )
 from storage_subnet.dht.base_dht import DHT
 from storage_subnet.dht.piece_dht import PieceDHTValue
-from storage_subnet.utils import logging
 from storage_subnet.utils.logging import setup_event_logger, setup_rotating_logger
 from storage_subnet.utils.piece import piece_hash
 from storage_subnet.utils.store import ObjectStore
-import logging as pylog
 
 
 class Miner(BaseMinerNeuron):
@@ -56,6 +55,8 @@ class Miner(BaseMinerNeuron):
         dht_port = (
             self.config.dht.port if hasattr(self.config, "dht.port") else DHT_PORT
         )
+        self.piece_count = 0
+        self.request_count = 0
         self.dht = DHT(dht_port)
         setup_rotating_logger(
             logger_name="kademlia",
@@ -108,6 +109,7 @@ class Miner(BaseMinerNeuron):
             synapse (template.protocol.Store): The synapse object containing piece
         """
         bt.logging.info("Received store request")
+        self.request_count += 1
         decoded_piece = base64.b64decode(synapse.piece.encode("utf-8"))
         piece_id = piece_hash(decoded_piece)
         bt.logging.debug(
@@ -115,7 +117,7 @@ class Miner(BaseMinerNeuron):
         )
 
         await self.object_store.write(piece_id, decoded_piece)
-
+        self.piece_count += 1
         await self.dht.store_piece_entry(
             piece_id,
             PieceDHTValue(
@@ -257,6 +259,8 @@ async def main():
         await miner.start_dht()
         while True:
             bt.logging.info(f"Miner running... {time.time()}")
+            bt.logging.debug(f"Received Request count: {miner.request_count}")
+            bt.logging.debug(f"Stored Piece count: {miner.piece_count}")
             await asyncio.sleep(30)
 
 

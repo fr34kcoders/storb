@@ -1,10 +1,10 @@
 from enum import StrEnum
 
 # TODO: make this variable - dependant on file size?
-QUERY_TIMEOUT = 5
+QUERY_TIMEOUT = 20
 NUM_UIDS_QUERY = 5
 QUERY_RATE = 10  # in blocks
-MAX_QUERY_BATCH_SIZE = 100  # default max query batch size
+MAX_QUERY_BATCH_SIZE = 20  # default max query batch size
 
 MIN_PIECE_SIZE = 16 * 1024  # 16 KiB
 MAX_PIECE_SIZE = 16 * 1024 * 1024  # 16 MiB
