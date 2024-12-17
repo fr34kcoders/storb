@@ -19,25 +19,36 @@
 import asyncio
 import base64
 import hashlib
+import logging
+import logging.config
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Iterable
 
 import aiosqlite
 import bittensor as bt
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
-from starlette.status import HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
+from starlette.status import (
+    HTTP_400_BAD_REQUEST,
+    HTTP_404_NOT_FOUND,
+    HTTP_500_INTERNAL_SERVER_ERROR,
+)
 
 import storage_subnet.validator.db as db
 
 # import base validator class which takes care of most of the boilerplate
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import (
+    DHT_PORT,
     EC_DATA_SIZE,
     EC_PARITY_SIZE,
     MAX_UPLOAD_SIZE,
     NUM_UIDS_QUERY,
     LogColor,
 )
+from storage_subnet.dht.base_dht import DHT
+from storage_subnet.dht.tracker_dht import TrackerDHTValue
 from storage_subnet.protocol import (
     MetadataResponse,
     MetadataSynapse,
@@ -45,10 +56,14 @@ from storage_subnet.protocol import (
     StoreResponse,
 )
 from storage_subnet.utils.infohash import generate_infohash
+from storage_subnet.utils.logging import (
+    UVICORN_LOGGING_CONFIG,
+    setup_event_logger,
+    setup_rotating_logger,
+)
 from storage_subnet.utils.piece import (
     piece_hash,
     piece_length,
-    reconstruct_file,
     split_file,
 )
 from storage_subnet.utils.uids import get_random_uids
@@ -69,6 +84,19 @@ class Validator(BaseValidatorNeuron):
         super(Validator, self).__init__(config=config)
         bt.logging.info("load_state()")
         self.load_state()
+        dht_port = (
+            self.config.dht.port if hasattr(self.config, "dht.port") else DHT_PORT
+        )
+        self.dht = DHT(dht_port)
+        setup_rotating_logger(
+            logger_name="kademlia",
+            log_level=logging.DEBUG,
+            max_size=5 * 1024 * 1024,  # 5 MiB
+        )
+
+        setup_event_logger(
+            retention_size=5 * 1024 * 1024  # 5 MiB
+        )
 
         # start the axon server
         self.axon.start()
@@ -88,11 +116,49 @@ class Validator(BaseValidatorNeuron):
         # TODO(developer): Rewrite this function based on your protocol definition.
         return await forward(self)
 
+    async def start_dht(self) -> None:
+        """
+        Start the DHT server.
+        """
+        try:
+            if self.config.dht.bootstrap.ip and self.config.dht.bootstrap.port:
+                bt.logging.info(
+                    f"Starting DHT server on port {self.config.dht.port} with bootstrap node {self.config.dht.bootstrap.ip}:{self.config.dht.bootstrap.port}"
+                )
+                bootstrap_ip = (
+                    self.config.dht.bootstrap.ip
+                    if hasattr(self.config.dht.bootstrap, "dht.bootstrap.ip")
+                    else None
+                )
+                bootstrap_port = (
+                    self.config.dht.bootstrap.port
+                    if hasattr(self.config.dht.bootstrap, "dht.bootstrap.port")
+                    else None
+                )
+                await self.dht.start(bootstrap_ip, bootstrap_port)
+            else:
+                bt.logging.info(f"Starting DHT server on port {self.config.dht.port}")
+                await self.dht.start()
+                bt.logging.info(f"DHT server started on port {self.config.dht.port}")
+        except Exception as e:
+            bt.logging.error(f"Failed to start DHT server: {e}")
+            raise RuntimeError("Failed to start DHT server") from e
+
 
 core_validator = None
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.dht = core_validator.dht
+    try:
+        yield
+    finally:
+        await core_validator.dht.stop()
+
+
 # API setup
-app = FastAPI(debug=False)
+app = FastAPI(debug=False, lifespan=lifespan)
 
 
 # logging middleware
@@ -144,8 +210,188 @@ async def obtain_metadata(infohash: str) -> MetadataResponse:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
 
+@app.get("/metadata/dht/", response_model=MetadataResponse)
+async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataResponse:
+    dht: DHT = request.app.state.dht
+    bt.logging.info(f"Retrieving metadata for infohash: {infohash}")
+    try:
+        metadata = await dht.get_tracker_entry(infohash)
+        return MetadataResponse(
+            infohash=infohash,
+            filename=metadata.filename,
+            timestamp=metadata.creation_timestamp,
+            piece_length=metadata.piece_length,
+            length=metadata.length,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
+
+
+# TODO: move this into a helper function for retrieve_file endpoint
+@app.get("/miners/")
+async def get_miners_for_file(infohash: str, request: Request) -> list[int]:
+    dht: DHT = request.app.state.dht
+    # Get the pieces from local tracker db
+    piece_ids = None
+    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
+        # TODO: erm we shouldn't need to access the array of piece ids like this?
+        # something might be wrong with get_pieces_from_infohash()
+        piece_ids = (await db.get_pieces_from_infohash(conn, infohash))["piece_ids"]
+    if piece_ids is None:
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail="No pieces found for the given infohash",
+        )
+
+    miners = []
+    for piece_id in piece_ids:
+        try:
+            piece_metadata = await dht.get_piece_entry(piece_id)
+            miners.append(piece_metadata.miner_id)
+        except Exception as e:
+            bt.logging.error(f"Failed to get miner for piece_id {piece_id}: {e}")
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to get miner for piece_id {piece_id}: {e}",
+            )
+
+    return miners
+
+
+# Upload Helper Functions
+async def process_pieces(
+    piece_generator: Iterable[tuple[str, bytes, int]],
+    piece_size: int,
+    uids: list[str],
+    core_validator: Validator,
+) -> tuple[list[str], list[tuple[str, bytes, int]]]:
+    """
+    Process pieces of data by generating their hashes, encoding them, and querying miners.
+
+    Args:
+        piece_generator (Iterable[tuple[str, bytes, int]]): An iterable of tuples where each tuple contains:
+            - ptype (str): The type of the piece.
+            - data (bytes): The data of the piece.
+            - pad (int): The padding length of the piece.
+        piece_size (int): The size of each piece in bytes.
+        uids (list[str]): A list of unique identifiers for the miners.
+        core_validator (Validator): The core validator instance used for querying miners.
+
+    Returns:
+        tuple[list[str], list[tuple[str, bytes, int]]]: A tuple containing:
+            - A list of piece hashes.
+            - A list of processed pieces, where each piece is a tuple containing:
+                - ptype (str): The type of the piece.
+                - data (bytes): The data of the piece.
+                - pad (int): The padding length of the piece.
+    """
+    piece_hashes = []
+    processed_pieces = []
+    to_query = []
+    curr_batch_size = 0
+    pieces_sent = 0
+
+    for idx, (ptype, data, pad) in enumerate(piece_generator):
+        p_hash = piece_hash(data)
+        piece_hashes.append(p_hash)
+        processed_pieces.append((ptype, data, pad))
+
+        # TODO: we base64 encode the data before sending it to the miner(s) for now
+        b64_encoded_piece = base64.b64encode(data).decode("utf-8")
+        bt.logging.trace(
+            f"piece{idx} | type: {ptype} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {data[:10]}"
+        )
+
+        # Create async tasks for querying miners
+        task = asyncio.create_task(
+            query_multiple_miners(
+                core_validator,
+                synapse=Store(ptype=ptype, piece=b64_encoded_piece, pad_len=pad),
+                uids=uids,
+            )
+        )
+        to_query.append(task)
+        curr_batch_size += 1
+        pieces_sent += 1
+
+        # Batch requests
+        if curr_batch_size >= core_validator.config.query_batch_size:
+            bt.logging.info(f"Sending {curr_batch_size} batched requests...")
+            batch_responses = await asyncio.gather(*to_query)
+            bt.logging.info("Sent batched requests")
+
+            for piece_batch in batch_responses:
+                for uid, response in piece_batch:
+                    bt.logging.debug(
+                        f"uid: {uid} response: {response.preview_no_piece()}"
+                    )
+
+            # Reset batch
+            curr_batch_size = 0
+            to_query = []
+
+    # Handle any remaining queries
+    if to_query:
+        bt.logging.info(f"Sending remaining {curr_batch_size} batched requests...")
+        batch_responses = await asyncio.gather(*to_query)
+        bt.logging.info("Sent remaining batched requests")
+
+        for piece_batch in batch_responses:
+            for uid, response in piece_batch:
+                bt.logging.debug(f"uid: {uid} response: {response.preview_no_piece()}")
+
+    bt.logging.debug(f"Sent {pieces_sent} pieces to miners")
+
+    return piece_hashes, processed_pieces
+
+
+async def store_in_dht(
+    dht: DHT,
+    validator_id: int,
+    infohash: str,
+    filename: str,
+    filesize: int,
+    piece_size: int,
+    piece_count: int,
+) -> None:
+    """
+    Asynchronously stores tracker entry information in a Distributed Hash Table (DHT).
+
+    Args:
+        dht (DHT): The DHT instance where the tracker entry will be stored.
+        validator_id (int): The ID of the validator.
+        infohash (str): The infohash of the file.
+        filename (str): The name of the file.
+        filesize (int): The size of the file in bytes.
+        piece_size (int): The size of each piece in bytes.
+        piece_count (int): The number of pieces the file is divided into.
+
+    Raises:
+        HTTPException: If storing the tracker entry in the DHT fails.
+    """
+    try:
+        await dht.store_tracker_entry(
+            infohash,
+            TrackerDHTValue(
+                validator_id=validator_id,
+                filename=filename,
+                length=filesize,
+                piece_length=piece_size,
+                piece_count=piece_count,
+                parity_count=2,
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to store tracker entry in DHT: {e}",
+        )
+
+
 @app.post("/store/", response_model=StoreResponse)
-async def upload_file(file: UploadFile) -> StoreResponse:
+async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
+    dht: DHT = req.app.state.dht
+    validator_id = core_validator.uid
     try:
         if not file.filename:
             raise HTTPException(
@@ -169,8 +415,7 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         file.file.seek(0)
         filename = file.filename
         filesize = file.size
-        piece_hashes = []
-        pieces = []
+        bt.logging.trace(f"file checksum: {og_checksum}")
 
         # Use constants for data/parity pieces
         data_pieces = EC_DATA_SIZE
@@ -179,59 +424,16 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         timestamp = str(datetime.now(UTC).timestamp())
 
         # Generate and store all pieces
-        # split_file yields (ptype, data, padlen)
         uids = get_random_uids(core_validator, k=NUM_UIDS_QUERY)
         bt.logging.info(f"uids to query: {uids}")
 
-        curr_batch_size = 0
-        to_query = []
-
-        for idx, (ptype, data, pad) in enumerate(
-            split_file(file, piece_size, data_pieces, parity_pieces)
-        ):
-            p_hash = piece_hash(data)
-            piece_hashes.append(p_hash)
-            pieces.append((ptype, data, pad))
-
-            # get ready to upload piece(s) to miner(s)
-            # TODO: we base64 encode the data before sending it to the miner(s) for now
-            b64_encoded_piece = base64.b64encode(data)
-            b64_encoded_piece = b64_encoded_piece.decode("utf-8")
-
-            bt.logging.trace(
-                f"piece{idx} | type: {ptype} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {b64_encoded_piece[:10]}"
-            )
-
-            # upload piece(s) to miner(s)
-            # TODO: this is not optimal - we should probably batch multiple requests
-            # and send them at once with asyncio create_task() and gather()
-            to_query.append(
-                asyncio.create_task(
-                    query_multiple_miners(
-                        core_validator,
-                        synapse=Store(
-                            ptype=ptype, piece=b64_encoded_piece, pad_len=pad
-                        ),
-                        uids=uids,
-                    )
-                )
-            )
-
-            curr_batch_size += 1
-            if curr_batch_size >= core_validator.config.query_batch_size:
-                bt.logging.info(f"Sending {curr_batch_size} batched requests...")
-                batch_responses = await asyncio.gather(*to_query)
-                bt.logging.info("Sent batched requests")
-                for piece_batch in batch_responses:
-                    for uid, response in piece_batch:
-                        bt.logging.debug(
-                            f"uid: {uid} response: {response.preview_no_piece()}"
-                        )
-
-                curr_batch_size = 0
-                to_query = []
-
-        bt.logging.trace(f"file checksum: {og_checksum}")
+        pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)
+        piece_hashes, _ = await process_pieces(
+            piece_size=piece_size,
+            piece_generator=pieces_generator,
+            uids=uids,
+            core_validator=core_validator,
+        )
 
         # TODO: score responses - consider responses that return the piece id to be successful?
 
@@ -239,20 +441,9 @@ async def upload_file(file: UploadFile) -> StoreResponse:
         infohash, _ = generate_infohash(
             filename, timestamp, piece_size, filesize, piece_hashes
         )
-
-        # TODO: Remove reconstruction from upload api before shipping
-        # Reconstruct the file from the pieces
-        reconstructed_data = reconstruct_file(pieces, data_pieces, parity_pieces)
-        reconstructed_hash = hashlib.sha256(reconstructed_data).hexdigest()
-
-        bt.logging.trace(f"reconstructed checksum: {reconstructed_hash}")
-
-        # Verify file integrity
-        if reconstructed_hash != og_checksum:
-            raise HTTPException(
-                status_code=HTTP_400_BAD_REQUEST, detail="File integrity check failed"
-            )
-
+        # Put piece hashes in a set
+        piece_hash_set = set(piece_hashes)
+        bt.logging.debug(f"Generated pieces: {len(piece_hash_set)}")
         # Store infohash and metadata in the database
         try:
             async with db.get_db_connection(
@@ -272,6 +463,17 @@ async def upload_file(file: UploadFile) -> StoreResponse:
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Unexpected database error: {e}",
             )
+
+        # Store metadata in the DHT
+        await store_in_dht(
+            dht=dht,
+            validator_id=validator_id,
+            infohash=infohash,
+            filename=filename,
+            filesize=filesize,
+            piece_size=piece_size,
+            piece_count=len(piece_hashes),
+        )
 
         bt.logging.info(f"Uploaded file with infohash: {infohash}")
         return StoreResponse(infohash=infohash)
@@ -350,7 +552,7 @@ async def run_uvicorn_server() -> None:
         app,
         host="0.0.0.0",
         port=core_validator.config.api_port,
-        log_level="info",
+        log_config=logging.config.dictConfig(UVICORN_LOGGING_CONFIG),
         loop="asyncio",
     )
     server = uvicorn.Server(config)
@@ -361,7 +563,7 @@ async def run_uvicorn_server() -> None:
 async def main() -> None:
     global core_validator  # noqa
     core_validator = Validator()
-
+    await core_validator.start_dht()
     if not (core_validator.config.synthetic or core_validator.config.organic):
         bt.logging.error(
             "You did not select a validator type to run! Ensure you select to run either a synthetic or organic validator. Shutting down..."

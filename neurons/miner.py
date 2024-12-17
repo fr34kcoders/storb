@@ -16,7 +16,9 @@
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
 
+import asyncio
 import base64
+import logging as pylog
 import time
 import typing
 
@@ -24,9 +26,15 @@ import bittensor as bt
 
 # Bittensor Miner Template:
 import storage_subnet
+from storage_subnet.base.miner import BaseMinerNeuron
 
 # import base miner class which takes care of most of the boilerplate
-from storage_subnet.base.miner import BaseMinerNeuron
+from storage_subnet.constants import (
+    DHT_PORT,
+)
+from storage_subnet.dht.base_dht import DHT
+from storage_subnet.dht.piece_dht import PieceDHTValue
+from storage_subnet.utils.logging import setup_event_logger, setup_rotating_logger
 from storage_subnet.utils.piece import piece_hash
 from storage_subnet.utils.store import ObjectStore
 
@@ -44,9 +52,52 @@ class Miner(BaseMinerNeuron):
         super(Miner, self).__init__(config=config)
 
         self.object_store = ObjectStore(store_dir=self.config.store_dir)
+        dht_port = (
+            self.config.dht.port if hasattr(self.config, "dht.port") else DHT_PORT
+        )
+        self.piece_count = 0
+        self.request_count = 0
+        self.dht = DHT(dht_port)
+        setup_rotating_logger(
+            logger_name="kademlia",
+            log_level=pylog.DEBUG,
+            max_size=5 * 1024 * 1024,  # 5 MiB
+        )
+
+        setup_event_logger(
+            retention_size=5 * 1024 * 1024  # 5 MiB
+        )
 
     async def forward(self, synapse: bt.Synapse) -> None:
         return None
+
+    async def start_dht(self) -> None:
+        """
+        Start the DHT server.
+        """
+        try:
+            if self.config.dht.bootstrap.ip and self.config.dht.bootstrap.port:
+                bt.logging.info(
+                    f"Starting DHT server on port {self.config.dht.port} with bootstrap node {self.config.dht.bootstrap.ip}:{self.config.dht.bootstrap.port}"
+                )
+                bootstrap_ip = (
+                    self.config.dht.bootstrap.ip
+                    if hasattr(self.config.dht.bootstrap, "dht.bootstrap.ip")
+                    else None
+                )
+                bootstrap_port = (
+                    self.config.dht.bootstrap.port
+                    if hasattr(self.config.dht.bootstrap, "dht.bootstrap.port")
+                    else None
+                )
+                await self.dht.start(bootstrap_ip, bootstrap_port)
+            else:
+                bt.logging.info(f"Starting DHT server on port {self.config.dht.port}")
+                await self.dht.start()
+                bt.logging.info(f"DHT server started on port {self.config.dht.port}")
+        except Exception as e:
+            bt.logging.error(f"Failed to start DHT server: {e}")
+            raise RuntimeError("Failed to start DHT server") from e
 
     async def store(
         self, synapse: storage_subnet.protocol.Store
@@ -58,6 +109,7 @@ class Miner(BaseMinerNeuron):
             synapse (template.protocol.Store): The synapse object containing piece
         """
         bt.logging.info("Received store request")
+        self.request_count += 1
         decoded_piece = base64.b64decode(synapse.piece.encode("utf-8"))
         piece_id = piece_hash(decoded_piece)
         bt.logging.debug(
@@ -65,6 +117,14 @@ class Miner(BaseMinerNeuron):
         )
 
         await self.object_store.write(piece_id, decoded_piece)
+        await self.dht.store_piece_entry(
+            piece_id,
+            PieceDHTValue(
+                miner_id=self.uid,
+                piece_type=synapse.ptype,
+            ),
+        )
+        self.piece_count += 1
 
         response = storage_subnet.protocol.Store(
             ptype=synapse.ptype,
@@ -194,9 +254,16 @@ class Miner(BaseMinerNeuron):
         return priority
 
 
-# This is the main function, which runs the miner.
-if __name__ == "__main__":
+async def main():
     with Miner() as miner:
+        await miner.start_dht()
         while True:
             bt.logging.info(f"Miner running... {time.time()}")
-            time.sleep(5)
+            bt.logging.debug(f"Received Request count: {miner.request_count}")
+            bt.logging.debug(f"Stored Piece count: {miner.piece_count}")
+            await asyncio.sleep(30)
+
+
+# This is the main function, which runs the miner.
+if __name__ == "__main__":
+    asyncio.run(main())

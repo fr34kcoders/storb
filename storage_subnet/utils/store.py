@@ -5,6 +5,7 @@ Provides utilities for accessing and managing the object store
 from pathlib import Path
 
 import aiofiles
+import bittensor as bt
 
 
 class ObjectStore:
@@ -50,8 +51,12 @@ class ObjectStore:
             piece_hash (str): Piece hash for the data.
             data (bytes): The piece data in bytes.
         """
+        bt.logging.deb(f"Writing piece {piece_hash} to store")
+        folder = self.path / piece_hash[0:2]
+        if not folder.exists():
+            folder.mkdir()
 
-        path = self.path / piece_hash[0:2] / piece_hash[2:]
+        path = folder / piece_hash[2:]
 
         async with aiofiles.open(path, mode="wb") as f:
             await f.write(data)

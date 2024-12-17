@@ -24,7 +24,7 @@ import bittensor as bt
 
 from storage_subnet.constants import DB_DIR, MAX_QUERY_BATCH_SIZE, STORE_DIR
 
-from .logging import setup_events_logger
+from .logging import setup_event_logger
 
 
 def is_cuda_available():
@@ -63,8 +63,9 @@ def check_config(cls, config: "bt.Config"):
 
     if not config.neuron.dont_save_events:
         # Add custom event logger for the events.
-        events_logger = setup_events_logger(
-            config.neuron.full_path, config.neuron.events_retention_size
+        events_logger = setup_event_logger(
+            config.neuron.events_retention_size,
+            config.neuron.full_path,
         )
         bt.logging.register_primary_logger(events_logger.name)
 
@@ -130,6 +131,27 @@ def add_args(cls, parser):
         type=str,
         help="Notes to add to the wandb run.",
         default="",
+    )
+
+    parser.add_argument(
+        "--dht.port",
+        type=int,
+        help="Port for the DHT.",
+        default=6942,
+    )
+
+    parser.add_argument(
+        "--dht.bootstrap.ip",
+        type=str,
+        help="Bootstrap node IP for the DHT.",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--dht.bootstrap.port",
+        type=int,
+        help="Bootstrap node port for the DHT.",
+        default=None,
     )
 
 
@@ -273,7 +295,7 @@ def add_validator_args(cls, parser):
         "--api_port",
         type=int,
         help="api port",
-        default=6969,
+        default=6960,
     )
 
     parser.add_argument(

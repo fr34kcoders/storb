@@ -391,6 +391,18 @@ wheels = [
 ]
 
 [[package]]
+name = "colorlog"
+version = "6.9.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "colorama", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/7a/359f4d5df2353f26172b3cc39ea32daa39af8de522205f512f458923e677/colorlog-6.9.0.tar.gz", hash = "sha256:bfba54a1b93b94f54e1f4fe48395725a3d92fd2a4af702f6bd70946bdc0c6ac2", size = 16624 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/51/9b208e85196941db2f0654ad0357ca6388ab3ed67efdbfc799f35d1f83aa/colorlog-6.9.0-py3-none-any.whl", hash = "sha256:5906e71acd67cb07a71e779c47c4bcb45fb8c2993eebe9e5adcd6a6f1b283eff", size = 11424 },
+]
+
+[[package]]
 name = "cryptography"
 version = "43.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -654,6 +666,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ed/55/39036716d19cab0747a5020fc7e907f362fbf48c984b14e62127f7e68e5d/jinja2-3.1.4.tar.gz", hash = "sha256:4a3aee7acbbe7303aede8e9648d13b8bf88a429282aa6122a993f0ac800cb369", size = 240245 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/31/80/3a54838c3fb461f6fec263ebf3a3a41771bd05190238de3486aae8540c36/jinja2-3.1.4-py3-none-any.whl", hash = "sha256:bc5dd2abb727a5319567b7a813e6a2e7318c39f4f487cfe6c89c6f9c7d25197d", size = 133271 },
+]
+
+[[package]]
+name = "kademlia"
+version = "2.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "rpcudp" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/85/5e54903d20e3ff7aa7a6a1d7be289b254a67a18cc7f94b7cdfeacf10af69/kademlia-2.2.2.tar.gz", hash = "sha256:22928c2e92544c7223ed5905c42bfea291336851beec7de436af4ca41ac0d8eb", size = 16908 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/11/1d/8d151cc631bd6e1590aab5e5f5c4643ebe43db51dc70121ea0819af94077/kademlia-2.2.2-py3-none-any.whl", hash = "sha256:47696d2e75d60d71eda47fe2e21a96312b0a05f850f9a6910073b5cd79494d0e", size = 20353 },
 ]
 
 [[package]]
@@ -1296,6 +1320,15 @@ wheels = [
 ]
 
 [[package]]
+name = "rpcudp"
+version = "5.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "u-msgpack-python" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/36/472469be162eabf8b112c87a0e3661b057cab6d54345d3898a3713fe911e/rpcudp-5.0.0.tar.gz", hash = "sha256:fa4a7cbdfe25101de9d71b89cbaeaddc02b9db3457ae74484855fe044b5e173a", size = 6260 }
+
+[[package]]
 name = "ruff"
 version = "0.8.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1399,7 +1432,9 @@ dependencies = [
     { name = "aiofiles" },
     { name = "aiosqlite" },
     { name = "bittensor" },
+    { name = "colorlog" },
     { name = "fastapi" },
+    { name = "kademlia" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "pytest" },
@@ -1410,7 +1445,7 @@ dependencies = [
     { name = "zfec" },
 ]
 
-[package.dependency-groups]
+[package.dev-dependencies]
 dev = [
     { name = "debugpy" },
     { name = "ruff" },
@@ -1421,7 +1456,9 @@ requires-dist = [
     { name = "aiofiles", specifier = ">=24.1.0" },
     { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "bittensor", specifier = "==8.4.5" },
+    { name = "colorlog", specifier = ">=6.9.0" },
     { name = "fastapi", specifier = ">=0.110.3" },
+    { name = "kademlia", specifier = ">=2.2.2" },
     { name = "numpy", specifier = "==2.0.2" },
     { name = "pydantic", specifier = ">=2.10.3" },
     { name = "pytest", specifier = ">=8.3.4" },
@@ -1432,7 +1469,7 @@ requires-dist = [
     { name = "zfec", specifier = ">=1.6.0.0" },
 ]
 
-[package.metadata.dependency-groups]
+[package.metadata.requires-dev]
 dev = [
     { name = "debugpy", specifier = ">=1.8.9" },
     { name = "ruff", specifier = ">=0.8.2" },
@@ -1513,6 +1550,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/df/db/f35a00659bc03fec321ba8bce9420de607a1d37f8342eee1863174c69557/typing_extensions-4.12.2.tar.gz", hash = "sha256:1a7ead55c7e559dd4dee8856e3a88b41225abfe1ce8df57b7c13915fe121ffb8", size = 85321 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/26/9f/ad63fc0248c5379346306f8668cda6e2e2e9c95e01216d2b8ffd9ff037d0/typing_extensions-4.12.2-py3-none-any.whl", hash = "sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d", size = 37438 },
+]
+
+[[package]]
+name = "u-msgpack-python"
+version = "2.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/36/9d/a40411a475e7d4838994b7f6bcc6bfca9acc5b119ce3a7503608c4428b49/u-msgpack-python-2.8.0.tar.gz", hash = "sha256:b801a83d6ed75e6df41e44518b4f2a9c221dc2da4bcd5380e3a0feda520bc61a", size = 18167 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/5e/512aeb40fd819f4660d00f96f5c7371ee36fc8c6b605128c5ee59e0b28c6/u_msgpack_python-2.8.0-py2.py3-none-any.whl", hash = "sha256:1d853d33e78b72c4228a2025b4db28cda81214076e5b0422ed0ae1b1b2bb586a", size = 10590 },
 ]
 
 [[package]]
