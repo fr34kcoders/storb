@@ -22,7 +22,7 @@ import subprocess
 
 import bittensor as bt
 
-from storage_subnet.constants import DB_DIR, MAX_QUERY_BATCH_SIZE, NUM_UIDS_QUERY, STORE_DIR
+from storage_subnet.constants import DB_DIR, MAX_QUERY_BATCH_SIZE, NUM_UIDS_QUERY, QUERY_TIMEOUT, STORE_DIR
 
 from .logging import setup_event_logger
 
@@ -317,6 +317,13 @@ def add_validator_args(cls, parser):
         type=int,
         help="number of uids to query per store request",
         default=NUM_UIDS_QUERY,
+    )
+
+    parser.add_argument(
+        "--query_timeout",
+        type=int,
+        help="query timeout",
+        default=QUERY_TIMEOUT,
     )
 
 
