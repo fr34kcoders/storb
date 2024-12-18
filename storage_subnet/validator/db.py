@@ -25,6 +25,56 @@ async def get_db_connection(db_dir: str, uri: bool = False):  # noqa: ANN201
         await conn.close()  # Ensure the connection is properly closed
 
 
+async def get_miner_stats(conn: aiosqlite.Connection, miner_uid: int):
+    query = """
+    SELECT * FROM miner_stats
+    WHERE miner_uid = ?
+    """
+    async with conn.execute(query, (miner_uid,)) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            return {
+                "miner_uid": row[0],
+                "challenge_attempts": row[1],
+                "retrieval_successes": row[2],
+                "retrieval_attempts": row[3],
+                "store_successes": row[4],
+                "store_attempts": row[5],
+                "total_successes": row[6],
+            }
+        return None  # Miner not found
+
+
+async def get_multiple_miner_stats(conn: aiosqlite.Connection, miner_uids: list[int]):
+    placeholders = ",".join("?" for _ in miner_uids)
+    query = f"""
+    SELECT * FROM miner_stats
+    WHERE miner_uid IN ({placeholders})
+    """
+    async with conn.execute(query, miner_uids) as cursor:
+        rows = await cursor.fetchall()
+        return {
+            row[0]: {
+                "miner_uid": row[0],
+                "challenge_attempts": row[1],
+                "retrieval_successes": row[2],
+                "retrieval_attempts": row[3],
+                "store_successes": row[4],
+                "store_attempts": row[5],
+                "total_successes": row[6],
+            }
+            for row in rows
+        }
+
+
+async def update_stats(conn: aiosqlite.Connection, miner_uid: int, stats: dict):
+    updates = ", ".join([f"{key} = ?" for key in stats.keys()])
+    values = list(stats.values()) + [miner_uid]
+    query = f"UPDATE miner_stats SET {updates} WHERE miner_uid = ?"
+    await conn.execute(query, values)
+    await conn.commit()
+
+
 async def store_infohash_piece_ids(
     conn: aiosqlite.Connection, infohash: str, piece_ids: list[str]
 ) -> None:

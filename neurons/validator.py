@@ -21,16 +21,16 @@ import base64
 import hashlib
 import logging
 import logging.config
+import queue
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-import queue
 from typing import Generator, Iterable
 
 import aiosqlite
 import bittensor as bt
-from fastapi.responses import StreamingResponse
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
@@ -283,29 +283,45 @@ async def process_pieces(
     Returns:
         tuple[list[str], list[tuple[str, bytes, int]]]: A tuple containing:
             - A list of piece hashes.
-            - A list of processed pieces, where each piece is a tuple containing:
-                - ptype (str): The type of the piece.
-                - data (bytes): The data of the piece.
-                - pad (int): The padding length of the piece.
+            - A list of processed pieces (ptype, data, pad).
     """
-    piece_hashes = []
-    processed_pieces = []
-    to_query = []
+    piece_hashes, processed_pieces, to_query = [], [], []
     curr_batch_size = 0
-    pieces_sent = 0
+
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        miner_stats = await db.get_multiple_miner_stats(conn, uids)
+
+    async def handle_batch_requests():
+        """Send batch requests and update miner stats."""
+        nonlocal to_query
+        tasks = [task for _, task in to_query]
+        batch_responses = await asyncio.gather(*tasks)
+        for piece_idx, batch in enumerate(batch_responses):
+            for uid, response in batch:
+                miner_stats[uid]["store_attempts"] += 1
+                bt.logging.debug(f"uid: {uid} response: {response.preview_no_piece()}")
+
+                # Verify piece hash
+                true_hash = piece_hashes[piece_idx]
+                if response.piece_id == true_hash:
+                    miner_stats[uid]["store_successes"] += 1
+                    miner_stats[uid]["total_successes"] += 1
+                    bt.logging.trace(f"miner {uid} successfully stored {true_hash}")
+
+        to_query = []  # Reset the batch
 
     for idx, (ptype, data, pad) in enumerate(piece_generator):
         p_hash = piece_hash(data)
         piece_hashes.append(p_hash)
         processed_pieces.append((ptype, data, pad))
 
-        # TODO: we base64 encode the data before sending it to the miner(s) for now
-        b64_encoded_piece = base64.b64encode(data).decode("utf-8")
+        # Log details
         bt.logging.trace(
             f"piece{idx} | type: {ptype} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {data[:10]}"
         )
 
-        # Create async tasks for querying miners
+        # Prepare the query for miners
+        b64_encoded_piece = base64.b64encode(data).decode("utf-8")
         task = asyncio.create_task(
             query_multiple_miners(
                 core_validator,
@@ -313,37 +329,30 @@ async def process_pieces(
                 uids=uids,
             )
         )
-        to_query.append(task)
+        to_query.append((idx, task))  # Pair index with the task
         curr_batch_size += 1
-        pieces_sent += 1
 
-        # Batch requests
+        # Send batch requests if batch size is reached
         if curr_batch_size >= core_validator.config.query_batch_size:
             bt.logging.info(f"Sending {curr_batch_size} batched requests...")
-            batch_responses = await asyncio.gather(*to_query)
-            bt.logging.info("Sent batched requests")
-
-            for piece_batch in batch_responses:
-                for uid, response in piece_batch:
-                    bt.logging.debug(
-                        f"uid: {uid} response: {response.preview_no_piece()}"
-                    )
-
-            # Reset batch
+            await handle_batch_requests()
             curr_batch_size = 0
-            to_query = []
 
     # Handle any remaining queries
     if to_query:
         bt.logging.info(f"Sending remaining {curr_batch_size} batched requests...")
-        batch_responses = await asyncio.gather(*to_query)
-        bt.logging.info("Sent remaining batched requests")
+        await handle_batch_requests()
 
-        for piece_batch in batch_responses:
-            for uid, response in piece_batch:
-                bt.logging.debug(f"uid: {uid} response: {response.preview_no_piece()}")
+    bt.logging.debug(f"Processed {len(piece_hashes)} pieces.")
 
-    bt.logging.debug(f"Sent {pieces_sent} pieces to miners")
+    # update miner stats table in db
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        for miner_uid in uids:
+            await db.update_stats(
+                conn,
+                miner_uid=miner_uid,
+                stats=miner_stats[miner_uid],
+            )
 
     return piece_hashes, processed_pieces
 
@@ -427,18 +436,24 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         timestamp = str(datetime.now(UTC).timestamp())
 
         # Generate and store all pieces
-        uids = get_random_uids(core_validator, k=core_validator.config.num_uids_query)
+        # TODO: better way to do this?
+        uids = [
+            int(x)
+            for x in get_random_uids(
+                core_validator, k=core_validator.config.num_uids_query
+            )
+        ]
         bt.logging.info(f"uids to query: {uids}")
 
         pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)
+
+        # process pieces, send them to miners, and update their stats
         piece_hashes, _ = await process_pieces(
             piece_size=piece_size,
             piece_generator=pieces_generator,
             uids=uids,
             core_validator=core_validator,
         )
-
-        # TODO: score responses - consider responses that return the piece id to be successful?
 
         # Generate infohash
         infohash, _ = generate_infohash(
@@ -515,6 +530,9 @@ async def retrieve_file(infohash: str):
     piece_ids = response.piece_ids
     miners = response.miners
 
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        miner_stats = await db.get_multiple_miner_stats(conn, miners)
+
     # TODO: check if piece_ids and miners lengths are the same
     # TODO: many of these can be moved around and placed into their own functions
 
@@ -538,19 +556,41 @@ async def retrieve_file(infohash: str):
 
     # TODO: optimize the rest of this
     # check integrity of file if found
+
     response_piece_ids = []
+    piece_ids_match = True
+
     for idx, uid_and_response in enumerate(responses):
-        _, response = uid_and_response
+        miner_uid, response = uid_and_response
+        miner_stats[miner_uid]["retrieval_attempts"] += 1
         decoded_piece = base64.b64decode(response.piece.encode("utf-8"))
         piece_id = piece_hash(decoded_piece)
+        # TODO: do we want to go through all the pieces/uids before returning the error?
+        # perhaps we can return an error response, and after we can continue scoring the
+        # miners in the background?
         if piece_id != piece_ids[idx]:
-            raise HTTPException(
-                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Piece ids don't not match!",
-            )
+            piece_ids_match = False
+        else:
+            miner_stats[miner_uid]["retrieval_successes"] += 1
+            miner_stats[miner_uid]["total_successes"] += 1
         response_piece_ids.append(piece_id)
 
     bt.logging.debug(f"tracker_dht: {tracker_dht}")
+
+    # update miner(s) stats in validator db
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        for miner_uid in miners:
+            await db.update_stats(
+                conn,
+                miner_uid=miner_uid,
+                stats=miner_stats[miner_uid],
+            )
+
+    if not piece_ids_match:
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Piece ids don't not match!",
+        )
 
     # stream the pieces as a file
     buffer = queue.Queue()
@@ -571,8 +611,10 @@ async def retrieve_file(infohash: str):
             yield chunk  # Yield the data chunk to the client
 
     asyncio.create_task(fill_buffer())
+
+    headers = {"Content-Disposition": f"attachment; filename={tracker_dht.filename}"}
     return StreamingResponse(
-        stream_from_buffer(), media_type="application/octet-stream"
+        stream_from_buffer(), media_type="application/octet-stream", headers=headers
     )
 
 

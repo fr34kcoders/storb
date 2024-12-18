@@ -32,8 +32,9 @@ async def forward(self):
         self (:obj:`bittensor.neuron.Neuron`): The neuron object which contains all the necessary state for the validator.
 
     """
-    bt.logging.info("skipping forward...")
+    # TODO: challenge miners - based on: https://dl.acm.org/doi/10.1145/1315245.1315318
 
+    bt.logging.info("skipping forward...")
     await asyncio.sleep(5)
 
 
