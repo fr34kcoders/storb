@@ -21,6 +21,8 @@ import typing
 import bittensor as bt
 from pydantic import BaseModel, Field
 
+from storage_subnet.dht.piece_dht import PieceDHTValue
+
 
 class StoreBase(BaseModel):
     ptype: str
@@ -66,13 +68,13 @@ class MetadataResponse(bt.Synapse):
 
 class GetMinersBase(BaseModel):
     infohash: str
+    piece_metadata: typing.Optional[list[PieceDHTValue]] = Field(default=None)
     piece_ids: typing.Optional[list[str]] = Field(default=None)
-    miners: typing.Optional[list[int]] = Field(default=None)
 
 
 class GetMiners(bt.Synapse, GetMinersBase):
     def __str__(self) -> str:
-        return f"GetMiners(infohash={self.infohash}, piece_ids={self.piece_ids}, miners={self.miners})"
+        return f"GetMiners(infohash={self.infohash}, piece_ids={self.piece_ids}, piece_metadata={self.piece_metadata})"
 
 
 class Dummy(bt.Synapse):

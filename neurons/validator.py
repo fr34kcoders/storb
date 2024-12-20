@@ -51,6 +51,7 @@ from storage_subnet.constants import (
     LogColor,
 )
 from storage_subnet.dht.base_dht import DHT
+from storage_subnet.dht.piece_dht import PieceDHTValue
 from storage_subnet.dht.tracker_dht import TrackerDHTValue
 from storage_subnet.protocol import (
     GetMiners,
@@ -69,6 +70,7 @@ from storage_subnet.utils.logging import (
 from storage_subnet.utils.piece import (
     piece_hash,
     piece_length,
+    reconstruct_file,
     split_file,
 )
 from storage_subnet.utils.uids import get_random_uids
@@ -137,19 +139,20 @@ class Validator(BaseValidatorNeuron):
                 detail="No pieces found for the given infohash",
             )
 
-        miners = []
+        piece_metadata: list[PieceDHTValue] = []
         for piece_id in piece_ids:
             try:
-                piece_metadata = await self.dht.get_piece_entry(piece_id)
-                miners.append(piece_metadata.miner_id)
+                piece = await self.dht.get_piece_entry(piece_id)
+                piece_metadata.append(piece)
             except Exception as e:
                 bt.logging.error(f"Failed to get miner for piece_id {piece_id}: {e}")
                 raise HTTPException(
                     status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to get miner for piece_id {piece_id}: {e}",
                 )
-
-        response = GetMiners(infohash=infohash, piece_ids=piece_ids, miners=miners)
+        response = GetMiners(
+            infohash=infohash, piece_ids=piece_ids, piece_metadata=piece_metadata
+        )
 
         return response
 
@@ -250,17 +253,8 @@ class Validator(BaseValidatorNeuron):
 core_validator = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    app.state.dht = core_validator.dht
-    try:
-        yield
-    finally:
-        await core_validator.dht.stop()
-
-
 # API setup
-app = FastAPI(debug=False, lifespan=lifespan)
+app = FastAPI(debug=False)
 
 
 # logging middleware
@@ -314,10 +308,9 @@ async def obtain_metadata(infohash: str) -> MetadataResponse:
 
 @app.get("/metadata/dht/", response_model=MetadataResponse)
 async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataResponse:
-    dht: DHT = request.app.state.dht
     bt.logging.info(f"Retrieving metadata for infohash: {infohash}")
     try:
-        metadata = await dht.get_tracker_entry(infohash)
+        metadata = await core_validator.dht.get_tracker_entry(infohash)
         return MetadataResponse(
             infohash=infohash,
             filename=metadata.filename,
@@ -426,7 +419,6 @@ async def process_pieces(
 
 
 async def store_in_dht(
-    dht: DHT,
     validator_id: int,
     infohash: str,
     filename: str,
@@ -450,7 +442,7 @@ async def store_in_dht(
         HTTPException: If storing the tracker entry in the DHT fails.
     """
     try:
-        await dht.store_tracker_entry(
+        await core_validator.dht.store_tracker_entry(
             infohash,
             TrackerDHTValue(
                 validator_id=validator_id,
@@ -470,7 +462,6 @@ async def store_in_dht(
 
 @app.post("/store/", response_model=StoreResponse)
 async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
-    dht: DHT = req.app.state.dht
     validator_id = core_validator.uid
     try:
         if not file.filename:
@@ -552,7 +543,6 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
 
         # Store metadata in the DHT
         await store_in_dht(
-            dht=dht,
             validator_id=validator_id,
             infohash=infohash,
             filename=filename,
@@ -596,7 +586,7 @@ async def retrieve_file(infohash: str):
     bt.logging.info(f"Response from validator {validator_to_ask}: {response}")
 
     piece_ids = response.piece_ids
-    miners = response.miners
+    pieces_metadata: list[PieceDHTValue] = response.piece_metadata
 
     async with db.get_db_connection(core_validator.config.db_dir) as conn:
         miner_stats = await db.get_multiple_miner_stats(conn, miners)
@@ -606,7 +596,7 @@ async def retrieve_file(infohash: str):
 
     # get piece(s) from miner(s)
     to_query = []
-    for idx, miner_uid in enumerate(miners):
+    for idx, piece_metadata in enumerate(pieces_metadata):
         piece_id = piece_ids[idx]
         synapse = Retrieve(piece_id=piece_id)
         to_query.append(
@@ -614,7 +604,7 @@ async def retrieve_file(infohash: str):
                 query_miner(
                     self=core_validator,
                     synapse=synapse,
-                    uid=miner_uid,
+                    uid=piece_metadata.miner_id,
                     deserialize=True,
                 )
             )
@@ -675,19 +665,27 @@ async def retrieve_file(infohash: str):
     )
 
     # stream the pieces as a file
-    buffer = queue.Queue()
+    buffer = asyncio.Queue()
 
-    # Function to add items to the buffer
     async def fill_buffer():
-        for _, response in responses:
-            piece = base64.b64decode(response.piece.encode("utf-8"))
-            buffer.put(piece)  # Add to buffer
-        buffer.put(None)  # Signal end of stream by adding None
+        try:
+            for reconstructed_chunk in reconstruct_file(
+                iter(response_piece_ids),
+                data_pieces=tracker_dht.piece_count,
+                parity_pieces=tracker_dht.parity_count,
+            ):
+                await buffer.put(reconstructed_chunk)
+            await buffer.put(None)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to reconstruct file: {e}",
+            )
 
     # Function to generate the stream
-    def stream_from_buffer() -> Generator[bytes, None, None]:
+    async def stream_from_buffer():
         while True:
-            chunk = buffer.get()  # Block until data is available
+            chunk = await buffer.get()  # Block until data is available
             if chunk is None:  # If None is received, end of the stream
                 break
             yield chunk  # Yield the data chunk to the client

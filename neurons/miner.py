@@ -122,6 +122,7 @@ class Miner(BaseMinerNeuron):
             PieceDHTValue(
                 miner_id=self.uid,
                 piece_type=synapse.ptype,
+                pad_len=synapse.pad_len,
             ),
         )
         self.piece_count += 1
