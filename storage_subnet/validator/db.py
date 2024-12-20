@@ -35,12 +35,13 @@ async def get_miner_stats(conn: aiosqlite.Connection, miner_uid: int):
         if row:
             return {
                 "miner_uid": row[0],
-                "challenge_attempts": row[1],
-                "retrieval_successes": row[2],
-                "retrieval_attempts": row[3],
-                "store_successes": row[4],
-                "store_attempts": row[5],
-                "total_successes": row[6],
+                "challenge_successes": row[1] or 0,
+                "challenge_attempts": row[2] or 0,
+                "retrieval_successes": row[3] or 0,
+                "retrieval_attempts": row[4] or 0,
+                "store_successes": row[5] or 0,
+                "store_attempts": row[6] or 0,
+                "total_successes": row[7] or 0,
             }
         return None  # Miner not found
 
@@ -56,12 +57,32 @@ async def get_multiple_miner_stats(conn: aiosqlite.Connection, miner_uids: list[
         return {
             row[0]: {
                 "miner_uid": row[0],
-                "challenge_attempts": row[1],
-                "retrieval_successes": row[2],
-                "retrieval_attempts": row[3],
-                "store_successes": row[4],
-                "store_attempts": row[5],
-                "total_successes": row[6],
+                "challenge_successes": row[1] or 0,
+                "challenge_attempts": row[2] or 0,
+                "retrieval_successes": row[3] or 0,
+                "retrieval_attempts": row[4] or 0,
+                "store_successes": row[5] or 0,
+                "store_attempts": row[6] or 0,
+                "total_successes": row[7] or 0,
+            }
+            for row in rows
+        }
+
+
+async def get_all_miner_stats(conn: aiosqlite.Connection):
+    query = "SELECT * FROM miner_stats"
+    async with conn.execute(query) as cursor:
+        rows = await cursor.fetchall()
+        return {
+            row[0]: {
+                "miner_uid": row[0],
+                "challenge_successes": row[1] or 0,
+                "challenge_attempts": row[2] or 0,
+                "retrieval_successes": row[3] or 0,
+                "retrieval_attempts": row[4] or 0,
+                "store_successes": row[5] or 0,
+                "store_attempts": row[6] or 0,
+                "total_successes": row[7] or 0,
             }
             for row in rows
         }

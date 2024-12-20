@@ -34,7 +34,7 @@ from storage_subnet.base.utils.weight_utils import (
     convert_weights_and_uids_for_emit,
     process_weights_for_netuid,
 )  # TODO: Replace when bittensor switches to numpy
-from storage_subnet.constants import QUERY_RATE
+from storage_subnet.constants import QUERY_RATE, QUERY_TIMEOUT
 from storage_subnet.mock import MockDendrite
 from storage_subnet.utils.config import add_validator_args
 
@@ -70,6 +70,11 @@ class BaseValidatorNeuron(BaseNeuron):
         # Set up initial scoring weights for validation
         bt.logging.info("Building validation weights.")
         self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
+
+        # Set up initial latency values for validation
+        self.latencies = np.full(self.metagraph.n, QUERY_TIMEOUT, dtype=np.float32)
+        # Set up initial latency scores for validation
+        self.latency_scores = np.zeros(self.metagraph.n, dtype=np.float32)
 
         # Init sync with the network. Updates the metagraph.
         self.sync()

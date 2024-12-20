@@ -253,6 +253,13 @@ def add_validator_args(cls, parser):
     )
 
     parser.add_argument(
+        "--neuron.response_time_alpha",
+        type=float,
+        help="Moving average alpha parameter for response time scores",
+        default=0.1,
+    )
+
+    parser.add_argument(
         "--neuron.axon_off",
         "--axon_off",
         action="store_true",

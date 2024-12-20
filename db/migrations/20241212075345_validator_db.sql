@@ -30,6 +30,7 @@ CREATE TABLE piece_id_miner_uids (
 -- Table for miner stats --
 CREATE TABLE miner_stats (
     miner_uid INTEGER PRIMARY KEY,
+    challenge_successes INTEGER,
     challenge_attempts INTEGER,
     retrieval_successes INTEGER,
     retrieval_attempts INTEGER,

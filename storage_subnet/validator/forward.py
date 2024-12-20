@@ -21,6 +21,9 @@ import asyncio
 
 import bittensor as bt
 
+import storage_subnet.validator.db as db
+from storage_subnet.validator.reward import get_response_rate_scores
+
 
 async def forward(self):
     """
@@ -34,7 +37,29 @@ async def forward(self):
     """
     # TODO: challenge miners - based on: https://dl.acm.org/doi/10.1145/1315245.1315318
 
-    bt.logging.info("skipping forward...")
+    # TODO: should we lock the db when scoring?
+    # scoring
+
+    # obtain all miner stats from the validator database
+    async with db.get_db_connection(self.config.db_dir) as conn:
+        miner_stats = await db.get_all_miner_stats(conn)
+
+    # calculate the score(s) for uids given their stats
+    response_rate_uids, response_rate_scores = get_response_rate_scores(
+        self, miner_stats
+    )
+    bt.logging.debug(f"response rate scores: {response_rate_scores}")
+    bt.logging.debug(f"moving avg. latencies: {self.latencies}")
+    bt.logging.debug(f"moving avg. latency scores: {self.latency_scores}")
+
+    # TODO: this should also take the "pdp challenge score" into account
+    # TODO: this is a little cooked ngl - will see if it is OK to go without indexing
+    rewards = (
+        0.2 * self.latency_scores[: len(response_rate_uids)]
+        + 0.3 * response_rate_scores[: len(response_rate_uids)]
+    )
+    self.update_scores(self, rewards, response_rate_uids)
+
     await asyncio.sleep(5)
 
 

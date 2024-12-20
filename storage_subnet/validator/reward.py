@@ -16,41 +16,41 @@
 # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 # OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 # DEALINGS IN THE SOFTWARE.
-from typing import List
-
-import bittensor as bt
 import numpy as np
 
 
-def reward(query: int, response: int) -> float:
-    """
-    Reward the miner response to the dummy request. This method returns a reward
-    value for the miner, which is used to update the miner's score.
-
-    Returns:
-    - float: The reward value for the miner.
-    """
-    bt.logging.info(
-        f"In rewards, query val: {query}, response val: {response}, rewards val: {1.0 if response == query * 2 else 0}"
-    )
-    return 1.0 if response == query * 2 else 0
-
-
-def get_rewards(
+def get_response_rate_scores(
     self,
-    query: int,
-    responses: List[float],
-) -> np.ndarray:
+    miner_stats: dict,
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Returns an array of rewards for the given query and responses.
+    Returns an array of scores for the given miner stats
 
     Args:
-    - query (int): The query sent to the miner.
-    - responses (List[float]): A list of responses from the miner.
+    - miner_stats (dicy): A dictionary of miner statistics
 
     Returns:
     - np.ndarray: An array of rewards for the given query and responses.
     """
-    # Get all the reward results by iteratively calling your reward() function.
 
-    return np.array([reward(query, response) for response in responses])
+    uids = []
+    weighted_rate_sums = []
+
+    uids_filter = list(range(self.metagraph.n))
+    for uid, miner_stats in miner_stats.items():
+        if uid not in uids_filter:
+            continue
+        uids.append(uid)
+        ret_attempts = max(miner_stats.get("retrieval_attempts", 1), 1)
+        store_attempts = max(miner_stats.get("store_attempts", 1), 1)
+        retrieval_rate = abs(miner_stats.get("retrieval_successes", 0) / ret_attempts)
+        store_rate = abs(miner_stats.get("store_successes", 0) / store_attempts)
+        weighted_rate_sum = (retrieval_rate / 2) + (store_rate / 2)
+        weighted_rate_sums.append(weighted_rate_sum)
+
+    uids = np.array(uids)
+    sum_max = max(*weighted_rate_sums)
+    sum_max = 1 if sum_max == 0 else sum_max
+    scores = np.asarray(weighted_rate_sums) / sum_max
+
+    return uids, scores

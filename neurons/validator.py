@@ -28,6 +28,7 @@ from typing import Generator, Iterable
 
 import aiosqlite
 import bittensor as bt
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -46,6 +47,7 @@ from storage_subnet.constants import (
     EC_DATA_SIZE,
     EC_PARITY_SIZE,
     MAX_UPLOAD_SIZE,
+    QUERY_TIMEOUT,
     LogColor,
 )
 from storage_subnet.dht.base_dht import DHT
@@ -71,6 +73,7 @@ from storage_subnet.utils.piece import (
 )
 from storage_subnet.utils.uids import get_random_uids
 from storage_subnet.validator import forward, query_miner, query_multiple_miners
+from storage_subnet.validator.reward import get_response_rate_scores
 
 
 # Define the Validator class
@@ -140,6 +143,16 @@ class Validator(BaseValidatorNeuron):
 
     async def forward(self):
         """
+        The forward function is called by the validator every time step.
+
+        It is responsible for querying the network and scoring the responses.
+
+        Args:
+            self (:obj:`bittensor.neuron.Neuron`): The neuron object which contains all the necessary state for the validator.
+
+        """
+
+        """
         Validator forward pass. Consists of:
         - Generating the query
         - Querying the miners
@@ -147,8 +160,33 @@ class Validator(BaseValidatorNeuron):
         - Rewarding the miners
         - Updating the scores
         """
-        # TODO(developer): Rewrite this function based on your protocol definition.
-        return await forward(self)
+
+        # TODO: challenge miners - based on: https://dl.acm.org/doi/10.1145/1315245.1315318
+
+        # TODO: should we lock the db when scoring?
+        # scoring
+
+        # obtain all miner stats from the validator database
+        async with db.get_db_connection(self.config.db_dir) as conn:
+            miner_stats = await db.get_all_miner_stats(conn)
+
+        # calculate the score(s) for uids given their stats
+        response_rate_uids, response_rate_scores = get_response_rate_scores(
+            self, miner_stats
+        )
+        bt.logging.debug(f"response rate scores: {response_rate_scores}")
+        bt.logging.debug(f"moving avg. latencies: {self.latencies}")
+        bt.logging.debug(f"moving avg. latency scores: {self.latency_scores}")
+
+        # TODO: this should also take the "pdp challenge score" into account
+        # TODO: this is a little cooked ngl - will see if it is OK to go without indexing
+        rewards = (
+            0.2 * self.latency_scores[: len(response_rate_uids)]
+            + 0.3 * response_rate_scores[: len(response_rate_uids)]
+        )
+        self.update_scores(rewards, response_rate_uids)
+
+        await asyncio.sleep(5)
 
     async def start_dht(self) -> None:
         """
@@ -560,6 +598,8 @@ async def retrieve_file(infohash: str):
     response_piece_ids = []
     piece_ids_match = True
 
+    latencies = np.full(core_validator.metagraph.n, QUERY_TIMEOUT, dtype=np.float32)
+
     for idx, uid_and_response in enumerate(responses):
         miner_uid, response = uid_and_response
         miner_stats[miner_uid]["retrieval_attempts"] += 1
@@ -570,9 +610,12 @@ async def retrieve_file(infohash: str):
         # miners in the background?
         if piece_id != piece_ids[idx]:
             piece_ids_match = False
+            latencies[miner_uid] = QUERY_TIMEOUT
         else:
             miner_stats[miner_uid]["retrieval_successes"] += 1
             miner_stats[miner_uid]["total_successes"] += 1
+            latencies[miner_uid] = response.dendrite.process_time
+
         response_piece_ids.append(piece_id)
 
     bt.logging.debug(f"tracker_dht: {tracker_dht}")
@@ -591,6 +634,15 @@ async def retrieve_file(infohash: str):
             status_code=HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Piece ids don't not match!",
         )
+
+    # we use the ema here so that the latency score changes aren't so sudden
+    alpha: float = core_validator.config.neuron.response_time_alpha
+    core_validator.latencies = (alpha * latencies) + (
+        1 - alpha
+    ) * core_validator.latencies
+    core_validator.latency_scores = (
+        core_validator.latencies / core_validator.latencies.max()
+    )
 
     # stream the pieces as a file
     buffer = queue.Queue()
