@@ -1,3 +1,4 @@
+import math
 from io import BytesIO
 from random import randbytes
 
@@ -17,7 +18,10 @@ def test_split_file():
     plen = piece_length(TEST_FILE_SIZE)
     gen = split_file(file, plen)
 
-    assert len(list(gen)) == EC_DATA_SIZE + EC_PARITY_SIZE
+    num_chunks = math.ceil(TEST_FILE_SIZE / (EC_DATA_SIZE * plen))
+    expected_pieces = num_chunks * (EC_DATA_SIZE + EC_PARITY_SIZE)
+
+    assert len(list(gen)) == expected_pieces
 
 
 def test_reconstruct_file():
@@ -29,7 +33,10 @@ def test_reconstruct_file():
 
     file_pieces = list(gen)
 
-    assert len(file_pieces) == EC_DATA_SIZE + EC_PARITY_SIZE
+    num_chunks = math.ceil(TEST_FILE_SIZE / (EC_DATA_SIZE * plen))
+    expected_pieces = num_chunks * (EC_DATA_SIZE + EC_PARITY_SIZE)
+
+    assert len(file_pieces) == expected_pieces
 
     reconstructed_data = reconstruct_file(file_pieces, EC_DATA_SIZE, EC_PARITY_SIZE)
 
