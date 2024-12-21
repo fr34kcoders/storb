@@ -76,6 +76,9 @@ class BaseValidatorNeuron(BaseNeuron):
         # Set up initial latency scores for validation
         self.latency_scores = np.zeros(self.metagraph.n, dtype=np.float32)
 
+        bt.logging.info("load_state()")
+        self.load_state()
+
         # Init sync with the network. Updates the metagraph.
         self.sync()
 
@@ -403,6 +406,8 @@ class BaseValidatorNeuron(BaseNeuron):
             step=self.step,
             scores=self.scores,
             hotkeys=self.hotkeys,
+            latencies=self.latencies,
+            latency_scores=self.latency_scores,
         )
 
     def load_state(self):
@@ -414,3 +419,5 @@ class BaseValidatorNeuron(BaseNeuron):
         self.step = state["step"]
         self.scores = state["scores"]
         self.hotkeys = state["hotkeys"]
+        self.latencies = state.get("latencies", self.latencies)
+        self.latency_scores = state.get("latency_scores", self.latency_scores)
