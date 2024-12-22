@@ -109,6 +109,20 @@ class Validator(BaseValidatorNeuron):
         return obtain_metadata(synapse.infohash)
 
     async def get_miners_for_file(self, synapse: GetMiners) -> GetMiners:
+        """
+        Retrieve the list of miners responsible for storing the pieces of a file based on its infohash.
+
+        This method looks up all piece IDs associated with the provided infohash from a local tracker database, 
+        and then retrieves the corresponding miner IDs from the DHT. If no pieces are found, an HTTP 404 error 
+        is raised. If the lookup for any piece's miner fails, an HTTP 500 error is raised.
+
+        :param synapse: A GetMiners instance containing the infohash to look up piece IDs and miners for.
+        :return: A GetMiners instance populated with the provided infohash, the associated piece IDs, 
+                 and the IDs of the miners that store those pieces.
+        :raises HTTPException:
+            - 404 if no pieces are found for the given infohash.
+            - 500 if any error occurs while retrieving miner information from the DHT.
+        """
         # Get the pieces from local tracker db
         infohash = synapse.infohash
 
