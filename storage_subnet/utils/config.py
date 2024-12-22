@@ -22,7 +22,13 @@ import subprocess
 
 import bittensor as bt
 
-from storage_subnet.constants import DB_DIR, MAX_QUERY_BATCH_SIZE, NUM_UIDS_QUERY, QUERY_TIMEOUT, STORE_DIR
+from storage_subnet.constants import (
+    DB_DIR,
+    MAX_QUERY_BATCH_SIZE,
+    NUM_UIDS_QUERY,
+    QUERY_TIMEOUT,
+    STORE_DIR,
+)
 
 from .logging import setup_event_logger
 
@@ -243,6 +249,13 @@ def add_validator_args(cls, parser):
         "--neuron.moving_average_alpha",
         type=float,
         help="Moving average alpha parameter, how much to add of the new observation.",
+        default=0.1,
+    )
+
+    parser.add_argument(
+        "--neuron.response_time_alpha",
+        type=float,
+        help="Moving average alpha parameter for response time scores",
         default=0.1,
     )
 

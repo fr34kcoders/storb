@@ -34,7 +34,7 @@ from storage_subnet.base.utils.weight_utils import (
     convert_weights_and_uids_for_emit,
     process_weights_for_netuid,
 )  # TODO: Replace when bittensor switches to numpy
-from storage_subnet.constants import QUERY_RATE
+from storage_subnet.constants import QUERY_RATE, QUERY_TIMEOUT
 from storage_subnet.mock import MockDendrite
 from storage_subnet.utils.config import add_validator_args
 
@@ -71,6 +71,14 @@ class BaseValidatorNeuron(BaseNeuron):
         bt.logging.info("Building validation weights.")
         self.scores = np.zeros(self.metagraph.n, dtype=np.float32)
 
+        # Set up initial latency values for validation
+        self.latencies = np.full(self.metagraph.n, QUERY_TIMEOUT, dtype=np.float32)
+        # Set up initial latency scores for validation
+        self.latency_scores = np.zeros(self.metagraph.n, dtype=np.float32)
+
+        bt.logging.info("load_state()")
+        self.load_state()
+
         # Init sync with the network. Updates the metagraph.
         self.sync()
 
@@ -92,6 +100,9 @@ class BaseValidatorNeuron(BaseNeuron):
     @abstractmethod
     async def get_metadata(self, synapse: bt.Synapse) -> bt.Synapse: ...
 
+    @abstractmethod
+    async def get_miners_for_file(self, synapse: bt.Synapse) -> bt.Synapse: ...
+
     def serve_axon(self):
         """Serve axon to enable external connections."""
 
@@ -99,8 +110,12 @@ class BaseValidatorNeuron(BaseNeuron):
         try:
             self.axon = bt.axon(wallet=self.wallet, config=self.config)
 
+            bt.logging.info("Attaching get_miners_for_file function to validator axon.")
+            self.axon.attach(forward_fn=self.get_miners_for_file)
+            bt.logging.info("Attached!")
             bt.logging.info("Attaching get_metadata function to validator axon.")
             self.axon.attach(forward_fn=self.get_metadata)
+            bt.logging.info("Attached!")
             bt.logging.info(f"Axon created: {self.axon}")
 
             try:
@@ -327,11 +342,33 @@ class BaseValidatorNeuron(BaseNeuron):
         # Check to see if the metagraph has changed size.
         # If so, we need to add new hotkeys and moving averages.
         if len(self.hotkeys) < len(self.metagraph.hotkeys):
+            bt.logging.debug(
+                "New uid added to subnet, updating length of scores arrays"
+            )
             # Update the size of the moving average scores.
             new_moving_average = np.zeros((self.metagraph.n))
+            new_latencies = np.full(self.metagraph.n, QUERY_TIMEOUT, dtype=np.float32)
+            new_latency_scores = np.zeros((self.metagraph.n))
             min_len = min(len(self.hotkeys), len(self.scores))
+            len_latencies = min(len(self.hotkeys), len(self.latencies))
+            len_latency_scores = min(len(self.hotkeys), len(self.latency_scores))
+
             new_moving_average[:min_len] = self.scores[:min_len]
+            new_latencies[:len_latencies] = self.latencies[:len_latencies]
+            new_latency_scores[:len_latency_scores] = self.latency_scores[
+                :len_latency_scores
+            ]
+
             self.scores = new_moving_average
+            self.latencies = new_latencies
+            self.latency_scores = new_latency_scores
+            bt.logging.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
+            bt.logging.debug(
+                f"(len: {len(self.latencies)}) New latencies: {self.latencies}"
+            )
+            bt.logging.debug(
+                f"(len: {len(self.latency_scores)}) New latency scores: {self.latency_scores}"
+            )
 
         # Update the hotkeys.
         self.hotkeys = copy.deepcopy(self.metagraph.hotkeys)
@@ -391,6 +428,8 @@ class BaseValidatorNeuron(BaseNeuron):
             step=self.step,
             scores=self.scores,
             hotkeys=self.hotkeys,
+            latencies=self.latencies,
+            latency_scores=self.latency_scores,
         )
 
     def load_state(self):
@@ -398,7 +437,14 @@ class BaseValidatorNeuron(BaseNeuron):
         bt.logging.info("Loading validator state.")
 
         # Load the state of the validator from file.
-        state = np.load(self.config.neuron.full_path + "/state.npz")
+        try:
+            state = np.load(self.config.neuron.full_path + "/state.npz")
+        except FileNotFoundError:
+            bt.logging.info("State file was not found, skipping loading state")
+            return
+
         self.step = state["step"]
         self.scores = state["scores"]
         self.hotkeys = state["hotkeys"]
+        self.latencies = state.get("latencies", self.latencies)
+        self.latency_scores = state.get("latency_scores", self.latency_scores)

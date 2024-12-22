@@ -27,7 +27,23 @@ CREATE TABLE piece_id_miner_uids (
     miner_uids TEXT            -- JSON string representing miner UIDs
 );
 
+-- Table for miner stats --
+CREATE TABLE miner_stats (
+    miner_uid INTEGER PRIMARY KEY,
+    challenge_successes INTEGER,
+    challenge_attempts INTEGER,
+    retrieval_successes INTEGER,
+    retrieval_attempts INTEGER,
+    store_successes INTEGER,
+    store_attempts INTEGER,
+    total_successes INTEGER
+)
+
 -- migrate:down
+
+-- Drop the miner_stats table
+DROP TABLE IF EXISTS miner_stats;
+
 -- Drop the table mapping piece IDs to miner UIDs
 DROP TABLE IF EXISTS piece_id_miner_uids;
 

@@ -64,6 +64,17 @@ class MetadataResponse(bt.Synapse):
     length: int
 
 
+class GetMinersBase(BaseModel):
+    infohash: str
+    piece_ids: typing.Optional[list[str]] = Field(default=None)
+    miners: typing.Optional[list[int]] = Field(default=None)
+
+
+class GetMiners(bt.Synapse, GetMinersBase):
+    def __str__(self) -> str:
+        return f"GetMiners(infohash={self.infohash}, piece_ids={self.piece_ids}, miners={self.miners})"
+
+
 class Dummy(bt.Synapse):
     """
     A simple dummy protocol representation which uses bt.Synapse as its base.

@@ -21,14 +21,17 @@ import base64
 import hashlib
 import logging
 import logging.config
+import queue
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Iterable
+from typing import Generator, Iterable
 
 import aiosqlite
 import bittensor as bt
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
@@ -44,13 +47,16 @@ from storage_subnet.constants import (
     EC_DATA_SIZE,
     EC_PARITY_SIZE,
     MAX_UPLOAD_SIZE,
+    QUERY_TIMEOUT,
     LogColor,
 )
 from storage_subnet.dht.base_dht import DHT
 from storage_subnet.dht.tracker_dht import TrackerDHTValue
 from storage_subnet.protocol import (
+    GetMiners,
     MetadataResponse,
     MetadataSynapse,
+    Retrieve,
     Store,
     StoreResponse,
 )
@@ -66,7 +72,8 @@ from storage_subnet.utils.piece import (
     split_file,
 )
 from storage_subnet.utils.uids import get_random_uids
-from storage_subnet.validator import forward, query_multiple_miners
+from storage_subnet.validator import forward, query_miner, query_multiple_miners
+from storage_subnet.validator.reward import get_response_rate_scores
 
 
 # Define the Validator class
@@ -81,8 +88,6 @@ class Validator(BaseValidatorNeuron):
 
     def __init__(self, config=None):
         super(Validator, self).__init__(config=config)
-        bt.logging.info("load_state()")
-        self.load_state()
         dht_port = (
             self.config.dht.port if hasattr(self.config, "dht.port") else DHT_PORT
         )
@@ -103,7 +108,62 @@ class Validator(BaseValidatorNeuron):
     async def get_metadata(self, synapse: MetadataSynapse) -> MetadataResponse:
         return obtain_metadata(synapse.infohash)
 
+    async def get_miners_for_file(self, synapse: GetMiners) -> GetMiners:
+        """
+        Retrieve the list of miners responsible for storing the pieces of a file based on its infohash.
+
+        This method looks up all piece IDs associated with the provided infohash from a local tracker database, 
+        and then retrieves the corresponding miner IDs from the DHT. If no pieces are found, an HTTP 404 error 
+        is raised. If the lookup for any piece's miner fails, an HTTP 500 error is raised.
+
+        :param synapse: A GetMiners instance containing the infohash to look up piece IDs and miners for.
+        :return: A GetMiners instance populated with the provided infohash, the associated piece IDs, 
+                 and the IDs of the miners that store those pieces.
+        :raises HTTPException:
+            - 404 if no pieces are found for the given infohash.
+            - 500 if any error occurs while retrieving miner information from the DHT.
+        """
+        # Get the pieces from local tracker db
+        infohash = synapse.infohash
+
+        piece_ids = None
+        async with db.get_db_connection(db_dir=self.config.db_dir) as conn:
+            # TODO: erm we shouldn't need to access the array of piece ids like this?
+            # something might be wrong with get_pieces_from_infohash()
+            piece_ids = (await db.get_pieces_from_infohash(conn, infohash))["piece_ids"]
+        if piece_ids is None:
+            raise HTTPException(
+                status_code=HTTP_404_NOT_FOUND,
+                detail="No pieces found for the given infohash",
+            )
+
+        miners = []
+        for piece_id in piece_ids:
+            try:
+                piece_metadata = await self.dht.get_piece_entry(piece_id)
+                miners.append(piece_metadata.miner_id)
+            except Exception as e:
+                bt.logging.error(f"Failed to get miner for piece_id {piece_id}: {e}")
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to get miner for piece_id {piece_id}: {e}",
+                )
+
+        response = GetMiners(infohash=infohash, piece_ids=piece_ids, miners=miners)
+
+        return response
+
     async def forward(self):
+        """
+        The forward function is called by the validator every time step.
+
+        It is responsible for querying the network and scoring the responses.
+
+        Args:
+            self (:obj:`bittensor.neuron.Neuron`): The neuron object which contains all the necessary state for the validator.
+
+        """
+
         """
         Validator forward pass. Consists of:
         - Generating the query
@@ -112,8 +172,51 @@ class Validator(BaseValidatorNeuron):
         - Rewarding the miners
         - Updating the scores
         """
-        # TODO(developer): Rewrite this function based on your protocol definition.
-        return await forward(self)
+
+        # TODO: challenge miners - based on: https://dl.acm.org/doi/10.1145/1315245.1315318
+
+        # TODO: should we lock the db when scoring?
+        # scoring
+
+        # obtain all miner stats from the validator database
+        async with db.get_db_connection(self.config.db_dir) as conn:
+            miner_stats = await db.get_all_miner_stats(conn)
+
+        # calculate the score(s) for uids given their stats
+        response_rate_uids, response_rate_scores = get_response_rate_scores(
+            self, miner_stats
+        )
+
+        if len(self.latency_scores) < len(response_rate_scores) or len(
+            self.latencies
+        ) < len(response_rate_scores):
+            new_len = len(response_rate_scores)
+            new_latencies = np.full(new_len, QUERY_TIMEOUT, dtype=np.float32)
+            new_latency_scores = np.zeros(new_len)
+            new_scores = np.zeros(new_len)
+
+            len_lat = len(self.latencies)
+            len_lat_scores = len(self.latency_scores)
+            len_scores = len(self.scores)
+
+            new_latencies[:len_lat] = self.latencies[:len_lat]
+            new_latency_scores[:len_lat_scores] = self.latency_scores[:len_lat_scores]
+            new_scores[:len_scores] = self.scores[:len_scores]
+
+            self.latencies = new_latencies
+            self.latency_scores = new_latency_scores
+            self.scores = new_scores
+
+        bt.logging.debug(f"response rate scores: {response_rate_scores}")
+        bt.logging.debug(f"moving avg. latencies: {self.latencies}")
+        bt.logging.debug(f"moving avg. latency scores: {self.latency_scores}")
+
+        # TODO: this should also take the "pdp challenge score" into account
+        # TODO: this is a little cooked ngl - will see if it is OK to go without indexing
+        rewards = 0.2 * self.latency_scores + 0.3 * response_rate_scores
+        self.update_scores(rewards, response_rate_uids)
+
+        await asyncio.sleep(5)
 
     async def start_dht(self) -> None:
         """
@@ -226,37 +329,6 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
 
-# TODO: move this into a helper function for retrieve_file endpoint
-@app.get("/miners/")
-async def get_miners_for_file(infohash: str, request: Request) -> list[int]:
-    dht: DHT = request.app.state.dht
-    # Get the pieces from local tracker db
-    piece_ids = None
-    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
-        # TODO: erm we shouldn't need to access the array of piece ids like this?
-        # something might be wrong with get_pieces_from_infohash()
-        piece_ids = (await db.get_pieces_from_infohash(conn, infohash))["piece_ids"]
-    if piece_ids is None:
-        raise HTTPException(
-            status_code=HTTP_404_NOT_FOUND,
-            detail="No pieces found for the given infohash",
-        )
-
-    miners = []
-    for piece_id in piece_ids:
-        try:
-            piece_metadata = await dht.get_piece_entry(piece_id)
-            miners.append(piece_metadata.miner_id)
-        except Exception as e:
-            bt.logging.error(f"Failed to get miner for piece_id {piece_id}: {e}")
-            raise HTTPException(
-                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to get miner for piece_id {piece_id}: {e}",
-            )
-
-    return miners
-
-
 # Upload Helper Functions
 async def process_pieces(
     piece_generator: Iterable[tuple[str, bytes, int]],
@@ -279,29 +351,45 @@ async def process_pieces(
     Returns:
         tuple[list[str], list[tuple[str, bytes, int]]]: A tuple containing:
             - A list of piece hashes.
-            - A list of processed pieces, where each piece is a tuple containing:
-                - ptype (str): The type of the piece.
-                - data (bytes): The data of the piece.
-                - pad (int): The padding length of the piece.
+            - A list of processed pieces (ptype, data, pad).
     """
-    piece_hashes = []
-    processed_pieces = []
-    to_query = []
+    piece_hashes, processed_pieces, to_query = [], [], []
     curr_batch_size = 0
-    pieces_sent = 0
+
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        miner_stats = await db.get_multiple_miner_stats(conn, uids)
+
+    async def handle_batch_requests():
+        """Send batch requests and update miner stats."""
+        nonlocal to_query
+        tasks = [task for _, task in to_query]
+        batch_responses = await asyncio.gather(*tasks)
+        for piece_idx, batch in enumerate(batch_responses):
+            for uid, response in batch:
+                miner_stats[uid]["store_attempts"] += 1
+                bt.logging.debug(f"uid: {uid} response: {response.preview_no_piece()}")
+
+                # Verify piece hash
+                true_hash = piece_hashes[piece_idx]
+                if response.piece_id == true_hash:
+                    miner_stats[uid]["store_successes"] += 1
+                    miner_stats[uid]["total_successes"] += 1
+                    bt.logging.trace(f"miner {uid} successfully stored {true_hash}")
+
+        to_query = []  # Reset the batch
 
     for idx, (ptype, data, pad) in enumerate(piece_generator):
         p_hash = piece_hash(data)
         piece_hashes.append(p_hash)
         processed_pieces.append((ptype, data, pad))
 
-        # TODO: we base64 encode the data before sending it to the miner(s) for now
-        b64_encoded_piece = base64.b64encode(data).decode("utf-8")
+        # Log details
         bt.logging.trace(
             f"piece{idx} | type: {ptype} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {data[:10]}"
         )
 
-        # Create async tasks for querying miners
+        # Prepare the query for miners
+        b64_encoded_piece = base64.b64encode(data).decode("utf-8")
         task = asyncio.create_task(
             query_multiple_miners(
                 core_validator,
@@ -309,37 +397,30 @@ async def process_pieces(
                 uids=uids,
             )
         )
-        to_query.append(task)
+        to_query.append((idx, task))  # Pair index with the task
         curr_batch_size += 1
-        pieces_sent += 1
 
-        # Batch requests
+        # Send batch requests if batch size is reached
         if curr_batch_size >= core_validator.config.query_batch_size:
             bt.logging.info(f"Sending {curr_batch_size} batched requests...")
-            batch_responses = await asyncio.gather(*to_query)
-            bt.logging.info("Sent batched requests")
-
-            for piece_batch in batch_responses:
-                for uid, response in piece_batch:
-                    bt.logging.debug(
-                        f"uid: {uid} response: {response.preview_no_piece()}"
-                    )
-
-            # Reset batch
+            await handle_batch_requests()
             curr_batch_size = 0
-            to_query = []
 
     # Handle any remaining queries
     if to_query:
         bt.logging.info(f"Sending remaining {curr_batch_size} batched requests...")
-        batch_responses = await asyncio.gather(*to_query)
-        bt.logging.info("Sent remaining batched requests")
+        await handle_batch_requests()
 
-        for piece_batch in batch_responses:
-            for uid, response in piece_batch:
-                bt.logging.debug(f"uid: {uid} response: {response.preview_no_piece()}")
+    bt.logging.debug(f"Processed {len(piece_hashes)} pieces.")
 
-    bt.logging.debug(f"Sent {pieces_sent} pieces to miners")
+    # update miner stats table in db
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        for miner_uid in uids:
+            await db.update_stats(
+                conn,
+                miner_uid=miner_uid,
+                stats=miner_stats[miner_uid],
+            )
 
     return piece_hashes, processed_pieces
 
@@ -423,18 +504,24 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         timestamp = str(datetime.now(UTC).timestamp())
 
         # Generate and store all pieces
-        uids = get_random_uids(core_validator, k=core_validator.config.num_uids_query)
+        # TODO: better way to do this?
+        uids = [
+            int(x)
+            for x in get_random_uids(
+                core_validator, k=core_validator.config.num_uids_query
+            )
+        ]
         bt.logging.info(f"uids to query: {uids}")
 
         pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)
+
+        # process pieces, send them to miners, and update their stats
         piece_hashes, _ = await process_pieces(
             piece_size=piece_size,
             piece_generator=pieces_generator,
             uids=uids,
             core_validator=core_validator,
         )
-
-        # TODO: score responses - consider responses that return the piece id to be successful?
 
         # Generate infohash
         infohash, _ = generate_infohash(
@@ -494,46 +581,123 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
 # TODO: WIP
 @app.get("/retrieve/")
 async def retrieve_file(infohash: str):
-    # check local pieces from infohash
+    # get validator id from tracker dht given infohash
+    tracker_dht = await core_validator.dht.get_tracker_entry(infohash)
+    validator_to_ask = tracker_dht.validator_id
 
-    piece_ids = None
-    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
-        piece_ids = await db.get_pieces_from_infohash(conn, infohash)
-
-    if piece_ids is not None:
-        return "found locally"
-        # check integrity of file if found
-        # reassemble and return file
-
-    # if not in local db query other validators
-
-    # get validator uids
-    # vali_uids = await get_query_api_nodes(core_validator.dendrite, core_validator.metagraph)
-    active_uids = [
-        uid
-        for uid in range(core_validator.metagraph.n.item())
-        if core_validator.metagraph.axons[uid].is_serving
-    ]
-
-    responses = await core_validator.dendrite.forward(
-        # Send the query to selected miner axons in the network.
-        axons=[core_validator.metagraph.axons[uid] for uid in active_uids],
-        # Construct a dummy query. This simply contains a single integer.
-        synapse=MetadataSynapse(infohash=infohash),
-        # All responses have the deserialize function called on them before returning.
-        # You are encouraged to define your own deserialization function.
-        # deserialize=True,
-        deserialize=False,
+    # get the uids of the miners(s) that stores each respective piece by asking the validator
+    synapse = GetMiners(infohash=infohash)
+    _, response = await query_miner(
+        core_validator,
+        synapse=synapse,
+        uid=validator_to_ask,
     )
 
-    for response in responses:
-        print(response)
+    bt.logging.info(f"Response from validator {validator_to_ask}: {response}")
 
-    # if found, update local tracker db
+    piece_ids = response.piece_ids
+    miners = response.miners
 
-    # check integrity of file
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        miner_stats = await db.get_multiple_miner_stats(conn, miners)
 
-    # reassemble and return file
+    # TODO: check if piece_ids and miners lengths are the same
+    # TODO: many of these can be moved around and placed into their own functions
+
+    # get piece(s) from miner(s)
+    to_query = []
+    for idx, miner_uid in enumerate(miners):
+        piece_id = piece_ids[idx]
+        synapse = Retrieve(piece_id=piece_id)
+        to_query.append(
+            asyncio.create_task(
+                query_miner(
+                    self=core_validator,
+                    synapse=synapse,
+                    uid=miner_uid,
+                    deserialize=True,
+                )
+            )
+        )
+
+    responses: list[tuple[int, Retrieve]] = await asyncio.gather(*to_query)
+
+    # TODO: optimize the rest of this
+    # check integrity of file if found
+
+    response_piece_ids = []
+    piece_ids_match = True
+
+    latencies = np.full(core_validator.metagraph.n, QUERY_TIMEOUT, dtype=np.float32)
+
+    for idx, uid_and_response in enumerate(responses):
+        miner_uid, response = uid_and_response
+        miner_stats[miner_uid]["retrieval_attempts"] += 1
+        decoded_piece = base64.b64decode(response.piece.encode("utf-8"))
+        piece_id = piece_hash(decoded_piece)
+        # TODO: do we want to go through all the pieces/uids before returning the error?
+        # perhaps we can return an error response, and after we can continue scoring the
+        # miners in the background?
+        if piece_id != piece_ids[idx]:
+            piece_ids_match = False
+            latencies[miner_uid] = QUERY_TIMEOUT
+        else:
+            miner_stats[miner_uid]["retrieval_successes"] += 1
+            miner_stats[miner_uid]["total_successes"] += 1
+            latencies[miner_uid] = response.dendrite.process_time
+
+        response_piece_ids.append(piece_id)
+
+    bt.logging.debug(f"tracker_dht: {tracker_dht}")
+
+    # update miner(s) stats in validator db
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        for miner_uid in miners:
+            await db.update_stats(
+                conn,
+                miner_uid=miner_uid,
+                stats=miner_stats[miner_uid],
+            )
+
+    if not piece_ids_match:
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Piece ids don't not match!",
+        )
+
+    # we use the ema here so that the latency score changes aren't so sudden
+    alpha: float = core_validator.config.neuron.response_time_alpha
+    core_validator.latencies = (alpha * latencies) + (
+        1 - alpha
+    ) * core_validator.latencies
+    core_validator.latency_scores = (
+        core_validator.latencies / core_validator.latencies.max()
+    )
+
+    # stream the pieces as a file
+    buffer = queue.Queue()
+
+    # Function to add items to the buffer
+    async def fill_buffer():
+        for _, response in responses:
+            piece = base64.b64decode(response.piece.encode("utf-8"))
+            buffer.put(piece)  # Add to buffer
+        buffer.put(None)  # Signal end of stream by adding None
+
+    # Function to generate the stream
+    def stream_from_buffer() -> Generator[bytes, None, None]:
+        while True:
+            chunk = buffer.get()  # Block until data is available
+            if chunk is None:  # If None is received, end of the stream
+                break
+            yield chunk  # Yield the data chunk to the client
+
+    asyncio.create_task(fill_buffer())
+
+    headers = {"Content-Disposition": f"attachment; filename={tracker_dht.filename}"}
+    return StreamingResponse(
+        stream_from_buffer(), media_type="application/octet-stream", headers=headers
+    )
 
 
 # Async main loop for the validator
