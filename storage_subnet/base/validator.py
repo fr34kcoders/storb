@@ -437,7 +437,12 @@ class BaseValidatorNeuron(BaseNeuron):
         bt.logging.info("Loading validator state.")
 
         # Load the state of the validator from file.
-        state = np.load(self.config.neuron.full_path + "/state.npz")
+        try:
+            state = np.load(self.config.neuron.full_path + "/state.npz")
+        except FileNotFoundError:
+            bt.logging.info("State file was not found, skipping loading state")
+            return
+
         self.step = state["step"]
         self.scores = state["scores"]
         self.hotkeys = state["hotkeys"]
