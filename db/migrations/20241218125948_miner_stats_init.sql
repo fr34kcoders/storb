@@ -272,4 +272,4 @@ FROM (
 
 
 -- migrate:down
-
+DELETE from miner_stats
