@@ -88,8 +88,6 @@ class Validator(BaseValidatorNeuron):
 
     def __init__(self, config=None):
         super(Validator, self).__init__(config=config)
-        bt.logging.info("load_state()")
-        self.load_state()
         dht_port = (
             self.config.dht.port if hasattr(self.config, "dht.port") else DHT_PORT
         )
@@ -174,16 +172,34 @@ class Validator(BaseValidatorNeuron):
         response_rate_uids, response_rate_scores = get_response_rate_scores(
             self, miner_stats
         )
+
+        if len(self.latency_scores) < len(response_rate_scores) or len(
+            self.latencies
+        ) < len(response_rate_scores):
+            new_len = len(response_rate_scores)
+            new_latencies = np.full(new_len, QUERY_TIMEOUT, dtype=np.float32)
+            new_latency_scores = np.zeros(new_len)
+            new_scores = np.zeros(new_len)
+
+            len_lat = len(self.latencies)
+            len_lat_scores = len(self.latency_scores)
+            len_scores = len(self.scores)
+
+            new_latencies[:len_lat] = self.latencies[:len_lat]
+            new_latency_scores[:len_lat_scores] = self.latency_scores[:len_lat_scores]
+            new_scores[:len_scores] = self.scores[:len_scores]
+
+            self.latencies = new_latencies
+            self.latency_scores = new_latency_scores
+            self.scores = new_scores
+
         bt.logging.debug(f"response rate scores: {response_rate_scores}")
         bt.logging.debug(f"moving avg. latencies: {self.latencies}")
         bt.logging.debug(f"moving avg. latency scores: {self.latency_scores}")
 
         # TODO: this should also take the "pdp challenge score" into account
         # TODO: this is a little cooked ngl - will see if it is OK to go without indexing
-        rewards = (
-            0.2 * self.latency_scores[: len(response_rate_uids)]
-            + 0.3 * response_rate_scores[: len(response_rate_uids)]
-        )
+        rewards = 0.2 * self.latency_scores + 0.3 * response_rate_scores
         self.update_scores(rewards, response_rate_uids)
 
         await asyncio.sleep(5)

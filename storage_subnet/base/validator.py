@@ -342,11 +342,33 @@ class BaseValidatorNeuron(BaseNeuron):
         # Check to see if the metagraph has changed size.
         # If so, we need to add new hotkeys and moving averages.
         if len(self.hotkeys) < len(self.metagraph.hotkeys):
+            bt.logging.debug(
+                "New uid added to subnet, updating length of scores arrays"
+            )
             # Update the size of the moving average scores.
             new_moving_average = np.zeros((self.metagraph.n))
+            new_latencies = np.full(self.metagraph.n, QUERY_TIMEOUT, dtype=np.float32)
+            new_latency_scores = np.zeros((self.metagraph.n))
             min_len = min(len(self.hotkeys), len(self.scores))
+            len_latencies = min(len(self.hotkeys), len(self.latencies))
+            len_latency_scores = min(len(self.hotkeys), len(self.latency_scores))
+
             new_moving_average[:min_len] = self.scores[:min_len]
+            new_latencies[:len_latencies] = self.latencies[:len_latencies]
+            new_latency_scores[:len_latency_scores] = self.latency_scores[
+                :len_latency_scores
+            ]
+
             self.scores = new_moving_average
+            self.latencies = new_latencies
+            self.latency_scores = new_latency_scores
+            bt.logging.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
+            bt.logging.debug(
+                f"(len: {len(self.latencies)}) New latencies: {self.latencies}"
+            )
+            bt.logging.debug(
+                f"(len: {len(self.latency_scores)}) New latency scores: {self.latency_scores}"
+            )
 
         # Update the hotkeys.
         self.hotkeys = copy.deepcopy(self.metagraph.hotkeys)
