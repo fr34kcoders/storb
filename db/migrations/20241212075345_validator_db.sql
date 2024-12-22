@@ -40,6 +40,10 @@ CREATE TABLE miner_stats (
 )
 
 -- migrate:down
+
+-- Drop the miner_stats table
+DROP TABLE IF EXISTS miner_stats;
+
 -- Drop the table mapping piece IDs to miner UIDs
 DROP TABLE IF EXISTS piece_id_miner_uids;
 
@@ -51,6 +55,3 @@ DROP TABLE IF EXISTS metadata;
 
 -- Drop the table mapping infohash to piece IDs
 DROP TABLE IF EXISTS infohash_piece_ids;
-
--- Drop the miner_stats table
-DROP TABLE IF EXISTS miner_stats;
