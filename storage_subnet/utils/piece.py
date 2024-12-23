@@ -1,14 +1,9 @@
-import hashlib
 import math
-from typing import Generator
 
 import bittensor as bt
-from fastapi import UploadFile
 from zfec.easyfec import Decoder, Encoder
 
 from storage_subnet.constants import (
-    EC_DATA_SIZE,
-    EC_PARITY_SIZE,
     MAX_PIECE_SIZE,
     MIN_PIECE_SIZE,
     PIECE_LENGTH_OFFSET,
@@ -19,16 +14,8 @@ from storage_subnet.constants import (
 def piece_length(
     content_length: int, min_size: int = MIN_PIECE_SIZE, max_size: int = MAX_PIECE_SIZE
 ) -> int:
-    """Calculate the appropriate piece size based on content length.
-
-    Args:
-        content_length (int): The total length of the content.
-        min_size (int, optional): The minimum allowed piece size. Defaults to MIN_PIECE_SIZE.
-        max_size (int, optional): The maximum allowed piece size. Defaults to MAX_PIECE_SIZE.
-
-    Returns:
-        int: The calculated piece size within the specified bounds.
-    """
+    """Calculate an approximate piece size based on content length,
+    clamped to a [min_size..max_size] range."""
     exponent = int(
         (math.log2(content_length) * PIECE_LENGTH_SCALING) + PIECE_LENGTH_OFFSET
     )
@@ -40,122 +27,154 @@ def piece_length(
     return length
 
 
-def piece_hash(data: bytes) -> str:
-    """Calculate the SHA-1 hash of a piece of data.
-
-    Args:
-        data (bytes): The data to hash.
-
-    Returns:
-        str: The SHA-1 hash of the data.
+def encode_chunk(chunk: bytes, chunk_idx: int) -> dict:
     """
-    return hashlib.sha1(data).hexdigest()
+    Encodes a single chunk of data into FEC pieces.
 
-
-def split_file(
-    file: UploadFile,
-    piece_size: int,
-    data_pieces: int = EC_DATA_SIZE,
-    parity_pieces: int = EC_PARITY_SIZE,
-) -> Generator[tuple[str, bytes, int], None, None]:
+    chunk: The raw bytes of this single chunk.
+    chunk_idx: The index of this chunk in the overall file or stream.
+    return: A dict containing:
+        {
+          "blocks": {
+            "block_idx": i,
+            "block_type": "data" or "parity",
+            "block_bytes": block
+            },
+          "chunk_idx": chunk_idx,
+          "k": k,
+          "m": m,
+          "chunk_size": zfec_chunk_size,
+          "padlen": padlen,
+          "original_chunk_length": len(chunk)
+        }
     """
-    Stream data and parity pieces as they are generated.
+    piece_size = piece_length(len(chunk))
+    bt.logging.debug(
+        f"[encode_chunk] chunk {chunk_idx}: {len(chunk)} bytes, piece_size = {piece_size}"
+    )
 
-    Args:
-        file (UploadFile): The input file to process.
-        piece_size (int): Size of each data piece (in bytes).
-        data_pieces (int): Number of data pieces (k).
-        parity_pieces (int): Number of parity pieces (m - k).
+    # Calculate how many data blocks (k) and parity blocks
+    expected_data_pieces = math.ceil(len(chunk) / piece_size)
+    expected_parity_pieces = math.ceil(expected_data_pieces / 2)
 
-    Yields:
-        Tuple[str, bytes, int]: A tuple where the first element indicates "data" or "parity",
-                                the second element is the corresponding piece,
-                                and the third element is the padding length.
+    k = expected_data_pieces
+    m = k + expected_parity_pieces
+
+    encoder = Encoder(k, m)
+    encoded_blocks = encoder.encode(chunk)
+
+    # Calculate how zfec splits/pads under the hood
+    zfec_chunk_size = (len(chunk) + (k - 1)) // k
+    padlen = (zfec_chunk_size * k) - len(chunk)
+
+    # block i is data if i < k, parity otherwise
+    block_metadata = []
+    for i, block in enumerate(encoded_blocks):
+        block_type = "data" if i < k else "parity"
+        block_metadata.append(
+            {"block_idx": i, "block_type": block_type, "block_bytes": block}
+        )
+
+    encoded_chunk = {
+        "blocks": block_metadata,
+        "chunk_idx": chunk_idx,
+        "k": k,
+        "m": m,
+        "chunk_size": zfec_chunk_size,
+        "padlen": padlen,
+        "original_chunk_length": len(chunk),
+    }
+
+    bt.logging.debug(
+        f"[encode_chunk] chunk {chunk_idx}: k={k}, m={m}, encoded {len(encoded_blocks)} blocks"
+    )
+    return encoded_chunk
+
+
+def decode_chunk(encoded_chunk: dict) -> bytes:
     """
-    total_pieces = data_pieces + parity_pieces
-    encoder = Encoder(data_pieces, total_pieces)
-    chunk_count = 0
+    Decodes a single chunk from the piece dictionary created by encode_chunk.
 
-    while chunk := file.file.read(data_pieces * piece_size):
-        bt.logging.trace(f"Reading chunk {chunk_count}...")
-
-        # Calculate padding length
-        padlen = (data_pieces * piece_size) - len(chunk)
-        if padlen > 0:
-            bt.logging.trace(f"Padding chunk {chunk_count} with {padlen} bytes...")
-            chunk = chunk.ljust(data_pieces * piece_size, b"\0")
-
-        # Split the chunk into data pieces
-        data_blocks = [
-            chunk[i * piece_size : (i + 1) * piece_size] for i in range(data_pieces)
-        ]
-
-        # Encode to get both data and parity pieces
-        encoded_blocks = encoder.encode(b"".join(data_blocks))
-
-        # Yield data pieces
-        for i in range(data_pieces):
-            bt.logging.trace(f"Yielding data piece {i}...")
-            yield ("data", encoded_blocks[i], padlen)
-
-        # Yield parity pieces
-        for i in range(data_pieces, total_pieces):
-            bt.logging.trace(f"Yielding parity piece {i}...")
-            yield ("parity", encoded_blocks[i], padlen)
-
-        chunk_count += 1
-
-
-def reconstruct_file(
-    pieces: iter,
-    data_pieces: int,
-    parity_pieces: int,
-) -> iter:
+    encoded_chunk: A dictionary containing:
+        {
+          "blocks": the list of encoded blocks,
+          "k": number of data pieces (threshold),
+          "m": total number of pieces,
+          "padlen": how many bytes to strip at the end,
+          ...
+        }
+    return: The decoded chunk as bytes.
     """
-    Streams the reconstructed original file from data and parity pieces generated by `split_file`
-    using the easyfec.Decoder, which expects a padlen argument and handles padding internally.
+    k = encoded_chunk["k"]
+    m = encoded_chunk["m"]
+    padlen = encoded_chunk["padlen"]
+    blocks = [b_info["block_bytes"] for b_info in encoded_chunk["blocks"]]
 
-    Args:
-        pieces (iter): A list of iterable or generator yielding tuples (ptype, piece, padlen).
-                      ptype is "data" or "parity".
-                      piece is the piece bytes.
-                      padlen is the padding added for that chunk.
-        data_pieces (int): k - number of data pieces.
-        parity_pieces (int): m-k number of parity pieces.
-
-    Yields:
-        bytes: The reconstructed original file data.
-    """
-    # Assert input parameters
-    assert data_pieces > 0, "data_pieces must be greater than 0"
-    assert parity_pieces > 0, "parity_pieces must be greater than 0"
-    assert pieces is not None, "pieces must not be None"
-
-    k = data_pieces
-    m = data_pieces + parity_pieces
-    sharenums = list(range(m))
+    # zfec decode requires exactly k blocks
+    if len(blocks) > k:
+        blocks_to_decode = blocks[:k]
+        sharenums = list(range(k))
+    else:
+        blocks_to_decode = blocks
+        sharenums = list(range(len(blocks)))
 
     decoder = Decoder(k, m)
-    chunk_pieces = []
-    current_padlen = 0
+    decoded_chunk = decoder.decode(blocks_to_decode, sharenums, padlen)
+    return decoded_chunk
 
-    for _, piece, padlen in pieces:
-        chunk_pieces.append(piece)
-        current_padlen = padlen  # same padlen for all pieces in this chunk
 
-        # Once we have m pieces, we can decode this chunk
-        if len(chunk_pieces) == m:
-            # Select any k pieces. Here we choose the first k.
-            selected_pieces = chunk_pieces[:k]
-            selected_sharenums = sharenums[:k]
+def encode_piece(piece: dict, piece_size: int) -> list[dict]:
+    """
+    Subdivides an encoded chunk into pieces that are distributed to miners.
 
-            # Decode using easyfec.Decoder, passing padlen directly
-            reconstructed_data = decoder.decode(
-                selected_pieces, selected_sharenums, current_padlen
-            )
-            yield reconstructed_data
+    Args:
+        piece (dict): A dictionary containing information about the chunk to be subdivided. 
+                      It should have the following structure:
+                      {
+                          "chunk_idx": int,
+                          "blocks": [
+                              {
+                                  "block_bytes": bytes,
+                                  "block_type": str,
+                                  "block_idx": int
+                              },
+                              ...
+                          ]
+        piece_size (int): The size of each piece in bytes.
 
-            # Reset for the next chunk
-            chunk_pieces = []
-    if chunk_pieces:
-        raise ValueError("Incomplete chunk found in pieces")
+    Returns:
+        list[dict]: A list of dictionaries, each representing a sub-piece of the original chunk.
+                    Each dictionary has the following structure:
+                    {
+                        "chunk_idx": int,
+                        "block_idx": int,
+                        "block_type": str,
+                        "piece_idx": int,
+                        "data": bytes
+                    }
+    """
+    pieces = []
+    chunk_idx = piece["chunk_idx"]
+
+    for block_info in piece["blocks"]:
+        block_bytes = block_info["block_bytes"]
+        block_type = block_info["block_type"]
+        block_idx = block_info["block_idx"]
+
+        offset = 0
+        piece_idx = 0
+        while offset < len(block_bytes):
+            piece = block_bytes[offset : offset + piece_size]
+            offset += piece_size 
+
+            subpiece_info = {
+                "chunk_idx": chunk_idx,
+                "block_idx": block_idx,
+                "block_type": block_type,
+                "piece_idx": piece_idx,
+                "data": piece,
+            }
+            pieces.append(subpiece_info)
+            piece_idx += 1
+
+    return pieces
