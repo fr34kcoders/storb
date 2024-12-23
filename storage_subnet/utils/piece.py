@@ -35,11 +35,11 @@ def encode_chunk(chunk: bytes, chunk_idx: int) -> dict:
     chunk_idx: The index of this chunk in the overall file or stream.
     return: A dict containing:
         {
-          "blocks": {
+          "blocks": [{
             "block_idx": i,
             "block_type": "data" or "parity",
             "block_bytes": block
-            },
+            }],
           "chunk_idx": chunk_idx,
           "k": k,
           "m": m,
@@ -123,12 +123,12 @@ def decode_chunk(encoded_chunk: dict) -> bytes:
     return decoded_chunk
 
 
-def encode_piece(piece: dict, piece_size: int) -> list[dict]:
+def encode_pieces(chunk: dict, piece_size: int) -> list[dict]:
     """
     Subdivides an encoded chunk into pieces that are distributed to miners.
 
     Args:
-        piece (dict): A dictionary containing information about the chunk to be subdivided. 
+        piece (dict): A dictionary containing information about the chunk to be subdivided.
                       It should have the following structure:
                       {
                           "chunk_idx": int,
@@ -154,9 +154,9 @@ def encode_piece(piece: dict, piece_size: int) -> list[dict]:
                     }
     """
     pieces = []
-    chunk_idx = piece["chunk_idx"]
+    chunk_idx = chunk["chunk_idx"]
 
-    for block_info in piece["blocks"]:
+    for block_info in chunk["blocks"]:
         block_bytes = block_info["block_bytes"]
         block_type = block_info["block_type"]
         block_idx = block_info["block_idx"]
@@ -165,16 +165,16 @@ def encode_piece(piece: dict, piece_size: int) -> list[dict]:
         piece_idx = 0
         while offset < len(block_bytes):
             piece = block_bytes[offset : offset + piece_size]
-            offset += piece_size 
+            offset += piece_size
 
-            subpiece_info = {
+            piece_info = {
                 "chunk_idx": chunk_idx,
                 "block_idx": block_idx,
                 "block_type": block_type,
                 "piece_idx": piece_idx,
                 "data": piece,
             }
-            pieces.append(subpiece_info)
+            pieces.append(piece_info)
             piece_idx += 1
 
     return pieces
