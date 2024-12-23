@@ -76,7 +76,6 @@ def test_reconstruct_file():
 
     shuffle(pieces)
 
-
     reconstructed_data = reconstruct_data(pieces, chunks)
     assert data == reconstructed_data, "Data mismatch!"
 
@@ -110,7 +109,6 @@ def test_reconstruct_file_corrupted():
         len(pieces) == expected_pieces
     ), f"Mismatch in piece counts! Expected {expected_pieces}, got {len(pieces)}"
 
-
     # Randomly drop 30% pieces
     for _ in pieces:
         max_pieces_to_lose = math.ceil(len(pieces) * 0.3)
@@ -122,7 +120,6 @@ def test_reconstruct_file_corrupted():
         pieces = [piece for piece in pieces if piece.piece_idx in keep_blocks]
 
     shuffle(pieces)
-
 
     reconstructed_data = reconstruct_data(pieces, chunks)
     assert data == reconstructed_data, "Data mismatch!"

@@ -1,6 +1,6 @@
 import hashlib
 import math
-from enum import Enum
+from enum import IntEnum, StrEnum
 
 import bittensor as bt
 from pydantic import BaseModel
@@ -14,9 +14,9 @@ from storage_subnet.constants import (
 )
 
 
-class PieceType(Enum):
-    Data = "data"
-    Parity = "parity"
+class PieceType(IntEnum):
+    Data = 0
+    Parity = 1
 
 
 class Piece(BaseModel):

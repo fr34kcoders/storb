@@ -539,7 +539,22 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                 core_validator=core_validator,
             )
 
-            piece_hashes.append(sent_piece_hashes)
+            dht_chunk = ChunkDHTValue(
+                piece_hashes=sent_piece_hashes,
+                chunk_idx=chunk_info.chunk_idx,
+                k=chunk_info.k,
+                m=chunk_info.m,
+                chunk_size=chunk_info.chunk_size,
+                padlen=chunk_info.padlen,
+                original_chunk_length=chunk_info.original_chunk_length,
+            )
+
+            chunk_hash = hashlib.sha1(
+                dht_chunk.model_dump_json().encode("utf-8")
+            ).hexdigest()
+
+            await core_validator.dht.store_chunk_entry(chunk_hash, dht_chunk)
+            chunk_hashes.append(chunk_hash)
 
             # TODO: score responses - consider responses that return the piece id to be successful?
 
@@ -570,14 +585,18 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                 detail=f"Unexpected database error: {e}",
             )
 
-        # Store metadata in the DHT
-        await store_in_dht(
-            validator_id=validator_id,
-            infohash=infohash,
-            filename=filename,
-            filesize=filesize,
-            piece_size=piece_size,
-            piece_count=len(piece_hashes),
+        # Store data object metadata in the DHT
+        await core_validator.dht.store_tracker_entry(
+            infohash,
+            TrackerDHTValue(
+                validator_id=validator_id,
+                filename=filename,
+                length=filesize,
+                chunk_length=chunk_size,
+                chunk_count=len(chunk_hashes),
+                chunk_hashes=chunk_hashes,
+                creation_timestamp=timestamp,
+            ),
         )
 
         bt.logging.info(f"Uploaded file with infohash: {infohash}")

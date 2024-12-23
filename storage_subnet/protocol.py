@@ -26,7 +26,8 @@ from storage_subnet.utils.piece import ProcessedPieceInfo
 
 
 class Store(bt.Synapse, ProcessedPieceInfo):
-    data: str # b64 encoded data
+    data: typing.Optional[str] = Field(default=None)  # b64 encoded data
+
     def __str__(self) -> str:
         return f"Store(block_type={self.block_type}, pad_len={self.pad_len}, piece_id={self.piece_id})"
 

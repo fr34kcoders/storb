@@ -4,6 +4,7 @@ from storage_subnet.utils.piece import PieceType
 
 # infohash -> ChunkDHTValue -> PieceDHTValue
 
+
 class PieceDHTValue(BaseModel):
     miner_id: int
     chunk_idx: int
@@ -12,6 +13,7 @@ class PieceDHTValue(BaseModel):
 
     def to_dict(self) -> dict:
         return self.model_dump()
+
 
 class ChunkDHTValue(BaseModel):
     piece_hashes: list[str]

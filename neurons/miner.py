@@ -113,7 +113,7 @@ class Miner(BaseMinerNeuron):
         decoded_piece = base64.b64decode(synapse.piece.encode("utf-8"))
         piece_id = piece_hash(decoded_piece)
         bt.logging.debug(
-            f"ptype: {synapse.ptype} | piece preview: {decoded_piece[:10]} | hash: {piece_id} | pad len: {synapse.pad_len}"
+            f"ptype: {synapse.piece_type} | piece preview: {decoded_piece[:10]} | hash: {piece_id}"
         )
 
         await self.object_store.write(piece_id, decoded_piece)
