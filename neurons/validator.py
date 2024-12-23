@@ -23,10 +23,7 @@ import logging.config
 import queue
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-<<<<<<< HEAD
 from typing import Generator, Iterable
-=======
->>>>>>> 912b23b (refactor: piece encoder and decoder; add chunk DHT)
 
 import aiosqlite
 import bittensor as bt
@@ -390,12 +387,9 @@ async def process_pieces(
             )
         )
 
-<<<<<<< HEAD
         # Log details
-=======
         # TODO: we base64 encode the data before sending it to the miner(s) for now
         b64_encoded_piece = base64.b64encode(piece_info.data).decode("utf-8")
->>>>>>> 912b23b (refactor: piece encoder and decoder; add chunk DHT)
         bt.logging.trace(
             f"piece{idx} | type: {piece_info.block_type} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {piece_info.data[:10]}"
         )
@@ -529,18 +523,6 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         ]
         bt.logging.info(f"uids to query: {uids}")
 
-<<<<<<< HEAD
-        pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)
-
-        # process pieces, send them to miners, and update their stats
-        piece_hashes, _ = await process_pieces(
-            piece_size=piece_size,
-            piece_generator=pieces_generator,
-            uids=uids,
-            core_validator=core_validator,
-        )
-
-=======
         piece_hashes = []
 
         # we read the file in chunks, and then distribute it in pieces across miners
@@ -561,7 +543,6 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
 
             # TODO: score responses - consider responses that return the piece id to be successful?
 
->>>>>>> 912b23b (refactor: piece encoder and decoder; add chunk DHT)
         # Generate infohash
         infohash, _ = generate_infohash(
             filename, timestamp, piece_size, filesize, piece_hashes
