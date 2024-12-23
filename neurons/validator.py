@@ -18,13 +18,15 @@
 
 import asyncio
 import base64
-import hashlib
 import logging
 import logging.config
 import queue
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+<<<<<<< HEAD
 from typing import Generator, Iterable
+=======
+>>>>>>> 912b23b (refactor: piece encoder and decoder; add chunk DHT)
 
 import aiosqlite
 import bittensor as bt
@@ -68,10 +70,13 @@ from storage_subnet.utils.logging import (
     setup_rotating_logger,
 )
 from storage_subnet.utils.piece import (
+    Piece,
+    ProcessedPieceInfo,
+    encode_chunk,
+    encode_pieces,
     piece_hash,
     piece_length,
-    reconstruct_file,
-    split_file,
+    reconstruct_data,
 )
 from storage_subnet.utils.uids import get_random_uids
 from storage_subnet.validator import forward, query_miner, query_multiple_miners
@@ -324,7 +329,7 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
 
 # Upload Helper Functions
 async def process_pieces(
-    piece_generator: Iterable[tuple[str, bytes, int]],
+    pieces: list[Piece],
     piece_size: int,
     uids: list[str],
     core_validator: Validator,
@@ -371,14 +376,28 @@ async def process_pieces(
 
         to_query = []  # Reset the batch
 
-    for idx, (ptype, data, pad) in enumerate(piece_generator):
-        p_hash = piece_hash(data)
+    for idx, piece_info in enumerate(pieces):
+        p_hash = piece_hash(piece_info.data)
         piece_hashes.append(p_hash)
-        processed_pieces.append((ptype, data, pad))
+        processed_pieces.append(
+            ProcessedPieceInfo(
+                chunk_idx=piece_info.chunk_idx,
+                block_idx=piece_info.block_idx,
+                block_type=piece_info.block_type,
+                piece_idx=piece_info.piece_idx,
+                data=piece_info.data,
+                piece_id=p_hash,
+            )
+        )
 
+<<<<<<< HEAD
         # Log details
+=======
+        # TODO: we base64 encode the data before sending it to the miner(s) for now
+        b64_encoded_piece = base64.b64encode(piece_info.data).decode("utf-8")
+>>>>>>> 912b23b (refactor: piece encoder and decoder; add chunk DHT)
         bt.logging.trace(
-            f"piece{idx} | type: {ptype} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {data[:10]}"
+            f"piece{idx} | type: {piece_info.block_type} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {piece_info.data[:10]}"
         )
 
         # Prepare the query for miners
@@ -386,7 +405,14 @@ async def process_pieces(
         task = asyncio.create_task(
             query_multiple_miners(
                 core_validator,
-                synapse=Store(ptype=ptype, piece=b64_encoded_piece, pad_len=pad),
+                synapse=Store(
+                    chunk_idx=piece_info.chunk_idx,
+                    block_idx=piece_info.block_idx,
+                    block_type=piece_info.block_type,
+                    piece_idx=piece_info.piece_idx,
+                    data=b64_encoded_piece,
+                    piece_id=p_hash,
+                ),
                 uids=uids,
             )
         )
@@ -480,17 +506,16 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                 status_code=HTTP_400_BAD_REQUEST, detail=f"Invalid file size: {e}"
             )
 
-        # Read the entire file content for checksum
-        file_content = await file.read()
-        og_checksum = hashlib.sha256(file_content).hexdigest()
-        file.file.seek(0)
+        # file metadata
         filename = file.filename
         filesize = file.size
-        bt.logging.trace(f"file checksum: {og_checksum}")
 
         # Use constants for data/parity pieces
         data_pieces = EC_DATA_SIZE
         parity_pieces = EC_PARITY_SIZE
+
+        # chunk size to read in each iteration
+        chunk_size = piece_length(filesize)
 
         timestamp = str(datetime.now(UTC).timestamp())
 
@@ -504,6 +529,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         ]
         bt.logging.info(f"uids to query: {uids}")
 
+<<<<<<< HEAD
         pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)
 
         # process pieces, send them to miners, and update their stats
@@ -514,6 +540,28 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
             core_validator=core_validator,
         )
 
+=======
+        piece_hashes = []
+
+        # we read the file in chunks, and then distribute it in pieces across miners
+        for chunk_idx, chunk in enumerate(
+            iter(lambda: file.file.read(chunk_size), b"")
+        ):
+            chunk_info = encode_chunk(chunk, chunk_idx)
+            piece_size = piece_length(chunk_info.chunk_size)
+            pieces = encode_pieces(chunk_info, piece_size)
+            sent_piece_hashes, _ = await process_pieces(
+                piece_size=piece_size,
+                pieces=pieces,
+                uids=uids,
+                core_validator=core_validator,
+            )
+
+            piece_hashes.append(sent_piece_hashes)
+
+            # TODO: score responses - consider responses that return the piece id to be successful?
+
+>>>>>>> 912b23b (refactor: piece encoder and decoder; add chunk DHT)
         # Generate infohash
         infohash, _ = generate_infohash(
             filename, timestamp, piece_size, filesize, piece_hashes
@@ -669,7 +717,7 @@ async def retrieve_file(infohash: str):
 
     async def fill_buffer():
         try:
-            for reconstructed_chunk in reconstruct_file(
+            for reconstructed_chunk in reconstruct_data(
                 iter(response_piece_ids),
                 data_pieces=tracker_dht.piece_count,
                 parity_pieces=tracker_dht.parity_count,

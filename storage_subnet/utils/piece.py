@@ -1,5 +1,6 @@
+import hashlib
 import math
-from typing import Literal
+from enum import Enum
 
 import bittensor as bt
 from pydantic import BaseModel
@@ -13,14 +14,19 @@ from storage_subnet.constants import (
 )
 
 
-class Block(BaseModel):
-    block_idx: int
-    block_type: Literal["data", "parity"]
-    block_bytes: bytes
+class PieceType(Enum):
+    Data = "data"
+    Parity = "parity"
 
+
+class Piece(BaseModel):
+    chunk_idx: int
+    piece_idx: int
+    piece_type: PieceType
+    data: bytes
 
 class EncodedChunk(BaseModel):
-    blocks: list[Block]
+    pieces: list[Piece]
     chunk_idx: int
     k: int  # Number of data blocks
     m: int  # Total blocks (data + parity)
@@ -29,16 +35,24 @@ class EncodedChunk(BaseModel):
     original_chunk_length: int
 
 
-class PieceInfo(BaseModel):
-    chunk_idx: int
-    block_idx: int
-    block_type: Literal["data", "parity"]
-    piece_idx: int
-    data: bytes
+class ProcessedPieceInfo(Piece):
+    piece_id: str
 
 
 class EncodedPieces(BaseModel):
-    pieces: list[PieceInfo]
+    pieces: list[Piece]
+
+
+def piece_hash(data: bytes) -> str:
+    """Calculate the SHA-1 hash of a piece of data.
+
+    Args:
+        data (bytes): The data to hash.
+
+    Returns:
+        str: The SHA-1 hash of the data.
+    """
+    return hashlib.sha1(data).hexdigest()
 
 
 def piece_length(
@@ -61,49 +75,62 @@ def encode_chunk(chunk: bytes, chunk_idx: int) -> EncodedChunk:
     """
     Encodes a single chunk of data into FEC pieces.
 
-    chunk: The raw bytes of this single chunk.
-    chunk_idx: The index of this chunk in the overall file or stream.
-    return: An EncodedChunk object.
+    Arguments
+        chunk (bytes): The raw bytes of this single chunk.
+        chunk_idx (int): The index of this chunk in the overall file or stream.
+
+    Returns:
+        EncodedChunk: An EncodedChunk object.
     """
-    piece_size = piece_length(len(chunk))
+    chunk_size = len(chunk)
+    piece_size = piece_length(chunk_size)
     bt.logging.debug(
-        f"[encode_chunk] chunk {chunk_idx}: {len(chunk)} bytes, piece_size = {piece_size}"
+        f"[encode_chunk] chunk {chunk_idx}: {chunk_size} bytes, piece_size = {piece_size}"
     )
 
     # Calculate how many data blocks (k) and parity blocks
-    expected_data_pieces = math.ceil(len(chunk) / piece_size)
+    expected_data_pieces = math.ceil(chunk_size / piece_size)
     expected_parity_pieces = math.ceil(expected_data_pieces / 2)
 
     k = expected_data_pieces
     m = k + expected_parity_pieces
 
     encoder = Encoder(k, m)
-    encoded_blocks = encoder.encode(chunk)
+    encoded_pieces = encoder.encode(chunk)
 
     # Calculate how zfec splits/pads under the hood
-    zfec_chunk_size = (len(chunk) + (k - 1)) // k
-    padlen = (zfec_chunk_size * k) - len(chunk)
+    zfec_chunk_size = (chunk_size + (k - 1)) // k
+    padlen = (zfec_chunk_size * k) - chunk_size
 
     # block i is data if i < k, parity otherwise
-    block_metadata = []
-    for i, block in enumerate(encoded_blocks):
-        block_type = "data" if i < k else "parity"
-        block_metadata.append(
-            Block(block_idx=i, block_type=block_type, block_bytes=block)
+    pieces = []
+    for i, piece in enumerate(encoded_pieces):
+        piece_type = PieceType.Data if i < k else PieceType.Parity
+        print(f"Encoding piece {i} with length {len(piece)}")
+        pieces.append(
+            Piece(
+                  piece_type=piece_type,
+                  data=piece,
+                  chunk_idx=chunk_idx,
+                  piece_idx=i,
+            )
         )
 
+    for piece in pieces:
+        print(f"[encode] Piece length: {len(piece.data)}")
+
     encoded_chunk = EncodedChunk(
-        blocks=block_metadata,
+        pieces=pieces,
         chunk_idx=chunk_idx,
         k=k,
         m=m,
         chunk_size=zfec_chunk_size,
         padlen=padlen,
-        original_chunk_length=len(chunk),
+        original_chunk_length=chunk_size,
     )
 
     bt.logging.debug(
-        f"[encode_chunk] chunk {chunk_idx}: k={k}, m={m}, encoded {len(encoded_blocks)} blocks"
+        f"[encode_chunk] chunk {chunk_idx}: k={k}, m={m}, encoded {len(encoded_chunk.pieces)} blocks"
     )
     return encoded_chunk
 
@@ -112,60 +139,58 @@ def decode_chunk(encoded_chunk: EncodedChunk) -> bytes:
     """
     Decodes a single chunk from the piece dictionary created by encode_chunk.
 
-    encoded_chunk: An EncodedChunk object.
-    return: The decoded chunk as bytes.
+    Arguments:
+        encoded_chunk (EncodedChunk): An EncodedChunk object.
+
+    Returns:
+        bytes: The decoded chunk as bytes.
     """
     k = encoded_chunk.k
     m = encoded_chunk.m
     padlen = encoded_chunk.padlen
-    blocks = [b_info.block_bytes for b_info in encoded_chunk.blocks]
+    pieces = [p.data for p in encoded_chunk.pieces]
 
     # zfec decode requires exactly k blocks
-    if len(blocks) > k:
-        blocks_to_decode = blocks[:k]
+    if len(pieces) > k:
+        pieces_to_decode = pieces[:k]
         sharenums = list(range(k))
     else:
-        blocks_to_decode = blocks
-        sharenums = list(range(len(blocks)))
+        pieces_to_decode = pieces
+        sharenums = list(range(len(pieces)))
 
     decoder = Decoder(k, m)
-    decoded_chunk = decoder.decode(blocks_to_decode, sharenums, padlen)
+    decoded_chunk = decoder.decode(pieces_to_decode, sharenums, padlen)
     return decoded_chunk
 
 
-def encode_pieces(chunk: EncodedChunk, piece_size: int) -> list[PieceInfo]:
+def reconstruct_data(pieces: list[Piece], chunks: list[EncodedChunk]) -> bytes:
     """
-    Subdivides an encoded chunk into pieces that are distributed to miners.
+    Reconstructs the original data from chunks
 
-    Args:
-        chunk (EncodedChunk): An EncodedChunk object containing information about the chunk to be subdivided.
-        piece_size (int): The size of each piece in bytes.
+    Arguments:
+        pieces (list[Piece]): List of pieces from the miners
+        chunks (list[EncodedChunk]): List of encoded chunks from the validators
 
     Returns:
-        List[PieceInfo]: A list of PieceInfo objects, each representing a sub-piece of the original chunk.
+        bytes: The original data in bytes
     """
-    pieces = []
-    chunk_idx = chunk.chunk_idx
+    reconstructed_chunks = []
 
-    for block_info in chunk.blocks:
-        block_bytes = block_info.block_bytes
-        block_type = block_info.block_type
-        block_idx = block_info.block_idx
+    for chunk in chunks:
+        chunk_idx = chunk.chunk_idx
 
-        offset = 0
-        piece_idx = 0
-        while offset < len(block_bytes):
-            piece = block_bytes[offset : offset + piece_size]
-            offset += piece_size
+        # Collect all pieces for this chunk (TODO: we can optimize this)
+        relevant_pieces = [piece for piece in pieces if piece.chunk_idx == chunk_idx]
+        relevant_pieces.sort(key=lambda p: p.piece_idx)
 
-            piece_info = PieceInfo(
-                chunk_idx=chunk_idx,
-                block_idx=block_idx,
-                block_type=block_type,
-                piece_idx=piece_idx,
-                data=piece,
-            )
-            pieces.append(piece_info)
-            piece_idx += 1
+        # Ensure at least k pieces are available for decoding
+        k = chunk.k
+        if len(relevant_pieces) < k:
+            raise ValueError(f"Not enough pieces to reconstruct chunk {chunk_idx}")
 
-    return pieces
+        chunk.pieces = relevant_pieces 
+        reconstructed_chunk = decode_chunk(chunk)
+        reconstructed_chunks.append(reconstructed_chunk)
+
+    reconstructed_data = b"".join(reconstructed_chunks)
+    return reconstructed_data

@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -8,15 +7,16 @@ class TrackerDHTValue(BaseModel):
     validator_id: int
     filename: str
     length: int = Field(..., gt=0, description="File length must be greater than 0.")
-    piece_length: int = Field(
-        ..., gt=0, description="Piece length must be greater than 0."
+    chunk_length: int = Field(
+        ..., gt=0, description="Chunk length must be greater than 0."
     )
-    piece_count: int = Field(
-        ..., gt=0, description="Piece count must be greater than 0."
+    chunk_count: int = Field(
+        ..., gt=0, description="Chunk count must be greater than 0."
     )
-    parity_count: int = Field(..., ge=0, description="Parity count cannot be negative.")
+    chunk_hashes: list[str] = Field(
+        ..., description="List of chunk hashes.", min_items=1
+    )
     creation_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
-    updated_timestamp: Union[str, None] = None
 
     @field_validator("filename")
     @classmethod
@@ -27,6 +27,3 @@ class TrackerDHTValue(BaseModel):
 
     def to_dict(self) -> dict:
         return self.model_dump()
-
-    def update_timestamp(self):
-        self.updated_timestamp = datetime.now().isoformat()

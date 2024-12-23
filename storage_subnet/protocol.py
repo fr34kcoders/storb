@@ -22,21 +22,16 @@ import bittensor as bt
 from pydantic import BaseModel, Field
 
 from storage_subnet.dht.piece_dht import PieceDHTValue
+from storage_subnet.utils.piece import ProcessedPieceInfo
 
 
-class StoreBase(BaseModel):
-    ptype: str
-    piece: typing.Optional[str] = Field(default=None)
-    pad_len: int
-    piece_id: typing.Optional[str] = Field(default=None)
-
-
-class Store(bt.Synapse, StoreBase):
+class Store(bt.Synapse, ProcessedPieceInfo):
+    data: str # b64 encoded data
     def __str__(self) -> str:
-        return f"Store(ptype={self.ptype}, piece={self.piece[:5]}..., pad_len={self.pad_len}, piece_id={self.piece_id})"
+        return f"Store(block_type={self.block_type}, pad_len={self.pad_len}, piece_id={self.piece_id})"
 
     def preview_no_piece(self) -> str:
-        return f"Store(ptype={self.ptype}, pad_len={self.pad_len}, piece_id={self.piece_id})"
+        return f"Store(block_type={self.block_type},  piece_id={self.piece_id})"
 
 
 class Retrieve(bt.Synapse):
