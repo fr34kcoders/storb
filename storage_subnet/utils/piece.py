@@ -1,6 +1,8 @@
 import math
+from typing import Literal
 
 import bittensor as bt
+from pydantic import BaseModel
 from zfec.easyfec import Decoder, Encoder
 
 from storage_subnet.constants import (
@@ -9,6 +11,34 @@ from storage_subnet.constants import (
     PIECE_LENGTH_OFFSET,
     PIECE_LENGTH_SCALING,
 )
+
+
+class Block(BaseModel):
+    block_idx: int
+    block_type: Literal["data", "parity"]
+    block_bytes: bytes
+
+
+class EncodedChunk(BaseModel):
+    blocks: list[Block]
+    chunk_idx: int
+    k: int  # Number of data blocks
+    m: int  # Total blocks (data + parity)
+    chunk_size: int
+    padlen: int
+    original_chunk_length: int
+
+
+class PieceInfo(BaseModel):
+    chunk_idx: int
+    block_idx: int
+    block_type: Literal["data", "parity"]
+    piece_idx: int
+    data: bytes
+
+
+class EncodedPieces(BaseModel):
+    pieces: list[PieceInfo]
 
 
 def piece_length(
@@ -27,26 +57,13 @@ def piece_length(
     return length
 
 
-def encode_chunk(chunk: bytes, chunk_idx: int) -> dict:
+def encode_chunk(chunk: bytes, chunk_idx: int) -> EncodedChunk:
     """
     Encodes a single chunk of data into FEC pieces.
 
     chunk: The raw bytes of this single chunk.
     chunk_idx: The index of this chunk in the overall file or stream.
-    return: A dict containing:
-        {
-          "blocks": [{
-            "block_idx": i,
-            "block_type": "data" or "parity",
-            "block_bytes": block
-            }],
-          "chunk_idx": chunk_idx,
-          "k": k,
-          "m": m,
-          "chunk_size": zfec_chunk_size,
-          "padlen": padlen,
-          "original_chunk_length": len(chunk)
-        }
+    return: An EncodedChunk object.
     """
     piece_size = piece_length(len(chunk))
     bt.logging.debug(
@@ -72,18 +89,18 @@ def encode_chunk(chunk: bytes, chunk_idx: int) -> dict:
     for i, block in enumerate(encoded_blocks):
         block_type = "data" if i < k else "parity"
         block_metadata.append(
-            {"block_idx": i, "block_type": block_type, "block_bytes": block}
+            Block(block_idx=i, block_type=block_type, block_bytes=block)
         )
 
-    encoded_chunk = {
-        "blocks": block_metadata,
-        "chunk_idx": chunk_idx,
-        "k": k,
-        "m": m,
-        "chunk_size": zfec_chunk_size,
-        "padlen": padlen,
-        "original_chunk_length": len(chunk),
-    }
+    encoded_chunk = EncodedChunk(
+        blocks=block_metadata,
+        chunk_idx=chunk_idx,
+        k=k,
+        m=m,
+        chunk_size=zfec_chunk_size,
+        padlen=padlen,
+        original_chunk_length=len(chunk),
+    )
 
     bt.logging.debug(
         f"[encode_chunk] chunk {chunk_idx}: k={k}, m={m}, encoded {len(encoded_blocks)} blocks"
@@ -91,24 +108,17 @@ def encode_chunk(chunk: bytes, chunk_idx: int) -> dict:
     return encoded_chunk
 
 
-def decode_chunk(encoded_chunk: dict) -> bytes:
+def decode_chunk(encoded_chunk: EncodedChunk) -> bytes:
     """
     Decodes a single chunk from the piece dictionary created by encode_chunk.
 
-    encoded_chunk: A dictionary containing:
-        {
-          "blocks": the list of encoded blocks,
-          "k": number of data pieces (threshold),
-          "m": total number of pieces,
-          "padlen": how many bytes to strip at the end,
-          ...
-        }
+    encoded_chunk: An EncodedChunk object.
     return: The decoded chunk as bytes.
     """
-    k = encoded_chunk["k"]
-    m = encoded_chunk["m"]
-    padlen = encoded_chunk["padlen"]
-    blocks = [b_info["block_bytes"] for b_info in encoded_chunk["blocks"]]
+    k = encoded_chunk.k
+    m = encoded_chunk.m
+    padlen = encoded_chunk.padlen
+    blocks = [b_info.block_bytes for b_info in encoded_chunk.blocks]
 
     # zfec decode requires exactly k blocks
     if len(blocks) > k:
@@ -123,43 +133,24 @@ def decode_chunk(encoded_chunk: dict) -> bytes:
     return decoded_chunk
 
 
-def encode_pieces(chunk: dict, piece_size: int) -> list[dict]:
+def encode_pieces(chunk: EncodedChunk, piece_size: int) -> list[PieceInfo]:
     """
     Subdivides an encoded chunk into pieces that are distributed to miners.
 
     Args:
-        piece (dict): A dictionary containing information about the chunk to be subdivided.
-                      It should have the following structure:
-                      {
-                          "chunk_idx": int,
-                          "blocks": [
-                              {
-                                  "block_bytes": bytes,
-                                  "block_type": str,
-                                  "block_idx": int
-                              },
-                              ...
-                          ]
+        chunk (EncodedChunk): An EncodedChunk object containing information about the chunk to be subdivided.
         piece_size (int): The size of each piece in bytes.
 
     Returns:
-        list[dict]: A list of dictionaries, each representing a sub-piece of the original chunk.
-                    Each dictionary has the following structure:
-                    {
-                        "chunk_idx": int,
-                        "block_idx": int,
-                        "block_type": str,
-                        "piece_idx": int,
-                        "data": bytes
-                    }
+        List[PieceInfo]: A list of PieceInfo objects, each representing a sub-piece of the original chunk.
     """
     pieces = []
-    chunk_idx = chunk["chunk_idx"]
+    chunk_idx = chunk.chunk_idx
 
-    for block_info in chunk["blocks"]:
-        block_bytes = block_info["block_bytes"]
-        block_type = block_info["block_type"]
-        block_idx = block_info["block_idx"]
+    for block_info in chunk.blocks:
+        block_bytes = block_info.block_bytes
+        block_type = block_info.block_type
+        block_idx = block_info.block_idx
 
         offset = 0
         piece_idx = 0
@@ -167,13 +158,13 @@ def encode_pieces(chunk: dict, piece_size: int) -> list[dict]:
             piece = block_bytes[offset : offset + piece_size]
             offset += piece_size
 
-            piece_info = {
-                "chunk_idx": chunk_idx,
-                "block_idx": block_idx,
-                "block_type": block_type,
-                "piece_idx": piece_idx,
-                "data": piece,
-            }
+            piece_info = PieceInfo(
+                chunk_idx=chunk_idx,
+                block_idx=block_idx,
+                block_type=block_type,
+                piece_idx=piece_idx,
+                data=piece,
+            )
             pieces.append(piece_info)
             piece_idx += 1
 
