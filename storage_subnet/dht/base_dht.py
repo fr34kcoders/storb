@@ -186,7 +186,7 @@ class DHT:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(
-                self.server.get(f"chunk_id:{chunk_id}"), self.loop
+                self.server.get(f"chunk:{chunk_id}"), self.loop
             )
             ser_value = future.result(timeout=5)
             if ser_value is None:
@@ -234,7 +234,7 @@ class DHT:
             ser_value = future.result(timeout=5)
             if ser_value is None:
                 raise RuntimeError(f"Failed to retrieve piece entry for {piece_id}")
-            value = ChunkDHTValue.model_validate_json(ser_value)
+            value = PieceDHTValue.model_validate_json(ser_value)
             bt.logging.info(f"Successfully retrieved piece entry for {piece_id}")
             return value
         except Exception as e:

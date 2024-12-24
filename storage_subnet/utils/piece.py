@@ -1,9 +1,11 @@
 import hashlib
 import math
-from enum import IntEnum, StrEnum
+from collections.abc import Iterator
+from enum import IntEnum
+import typing
 
 import bittensor as bt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from zfec.easyfec import Decoder, Encoder
 
 from storage_subnet.constants import (
@@ -20,13 +22,17 @@ class PieceType(IntEnum):
 
 
 class Piece(BaseModel):
+    class Config:
+        use_enum_values = True
+
     chunk_idx: int
     piece_idx: int
     piece_type: PieceType
     data: bytes
 
+
 class EncodedChunk(BaseModel):
-    pieces: list[Piece]
+    pieces: list[Piece] = Field(default=None, required=False)
     chunk_idx: int
     k: int  # Number of data blocks
     m: int  # Total blocks (data + parity)
@@ -36,7 +42,7 @@ class EncodedChunk(BaseModel):
 
 
 class ProcessedPieceInfo(Piece):
-    piece_id: str
+    piece_id: typing.Optional[str] = Field(default=None)
 
 
 class EncodedPieces(BaseModel):
@@ -109,10 +115,10 @@ def encode_chunk(chunk: bytes, chunk_idx: int) -> EncodedChunk:
         print(f"Encoding piece {i} with length {len(piece)}")
         pieces.append(
             Piece(
-                  piece_type=piece_type,
-                  data=piece,
-                  chunk_idx=chunk_idx,
-                  piece_idx=i,
+                piece_type=piece_type,
+                data=piece,
+                chunk_idx=chunk_idx,
+                piece_idx=i,
             )
         )
 
@@ -188,9 +194,37 @@ def reconstruct_data(pieces: list[Piece], chunks: list[EncodedChunk]) -> bytes:
         if len(relevant_pieces) < k:
             raise ValueError(f"Not enough pieces to reconstruct chunk {chunk_idx}")
 
-        chunk.pieces = relevant_pieces 
+        chunk.pieces = relevant_pieces
         reconstructed_chunk = decode_chunk(chunk)
         reconstructed_chunks.append(reconstructed_chunk)
 
     reconstructed_data = b"".join(reconstructed_chunks)
     return reconstructed_data
+
+
+def reconstruct_data_stream(
+    pieces: list[Piece], chunks: list[EncodedChunk]
+) -> Iterator[bytes]:
+    """
+    Generator that yields the reconstructed data chunk by chunk.
+    Each yield returns the decoded bytes for a single chunk.
+    """
+
+    for chunk in chunks:
+        chunk_idx = chunk.chunk_idx
+
+        # Collect all pieces for this chunk (TODO: we can optimize this)
+        relevant_pieces = [piece for piece in pieces if piece.chunk_idx == chunk_idx]
+        relevant_pieces.sort(key=lambda p: p.piece_idx)
+
+        # Ensure at least k pieces are available for decoding
+        k = chunk.k
+        if len(relevant_pieces) < k:
+            raise ValueError(f"Not enough pieces to reconstruct chunk {chunk_idx}")
+
+        # Attach the relevant pieces to the chunk object for decoding
+        chunk.pieces = relevant_pieces
+
+        # Decode the chunk
+        reconstructed_chunk = decode_chunk(chunk)
+        yield reconstructed_chunk

@@ -21,7 +21,7 @@ import typing
 import bittensor as bt
 from pydantic import BaseModel, Field
 
-from storage_subnet.dht.piece_dht import PieceDHTValue
+from storage_subnet.dht.piece_dht import ChunkDHTValue, PieceDHTValue
 from storage_subnet.utils.piece import ProcessedPieceInfo
 
 
@@ -29,10 +29,10 @@ class Store(bt.Synapse, ProcessedPieceInfo):
     data: typing.Optional[str] = Field(default=None)  # b64 encoded data
 
     def __str__(self) -> str:
-        return f"Store(block_type={self.block_type}, pad_len={self.pad_len}, piece_id={self.piece_id})"
+        return f"Store(piece_type={self.piece_type}, pad_len={self.pad_len}, piece_id={self.piece_id})"
 
     def preview_no_piece(self) -> str:
-        return f"Store(block_type={self.block_type},  piece_id={self.piece_id})"
+        return f"Store(piece_type={self.piece_type},  piece_id={self.piece_id})"
 
 
 class Retrieve(bt.Synapse):
@@ -64,13 +64,21 @@ class MetadataResponse(bt.Synapse):
 
 class GetMinersBase(BaseModel):
     infohash: str
-    piece_metadata: typing.Optional[list[PieceDHTValue]] = Field(default=None)
-    piece_ids: typing.Optional[list[str]] = Field(default=None)
+    chunk_ids: typing.Optional[list[str]] = Field(default=None)
+    chunks_metadata: typing.Optional[list[ChunkDHTValue]] = Field(
+        default=None
+    )  # list of chunk metadata
+    pieces_metadata: typing.Optional[list[list[PieceDHTValue]]] = Field(
+        default=None
+    )  # multi dimensional array of piece metadata. each row corresponds to a chunk
 
 
 class GetMiners(bt.Synapse, GetMinersBase):
     def __str__(self) -> str:
-        return f"GetMiners(infohash={self.infohash}, piece_ids={self.piece_ids}, piece_metadata={self.piece_metadata})"
+        return f"GetMiners(infohash={self.infohash}, \
+            chunk_ids={self.chunk_ids}, \
+            chunks_metadata={self.chunks_metadata}, \
+            pieces_metadata={self.pieces_metadata})"
 
 
 class Dummy(bt.Synapse):

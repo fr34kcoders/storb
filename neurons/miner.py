@@ -110,7 +110,7 @@ class Miner(BaseMinerNeuron):
         """
         bt.logging.info("Received store request")
         self.request_count += 1
-        decoded_piece = base64.b64decode(synapse.piece.encode("utf-8"))
+        decoded_piece = base64.b64decode(synapse.data.encode("utf-8"))
         piece_id = piece_hash(decoded_piece)
         bt.logging.debug(
             f"ptype: {synapse.piece_type} | piece preview: {decoded_piece[:10]} | hash: {piece_id}"
@@ -121,15 +121,17 @@ class Miner(BaseMinerNeuron):
             piece_id,
             PieceDHTValue(
                 miner_id=self.uid,
-                piece_type=synapse.ptype,
-                pad_len=synapse.pad_len,
+                chunk_idx=synapse.chunk_idx,
+                piece_idx=synapse.piece_idx,
+                piece_type=synapse.piece_type,
             ),
         )
         self.piece_count += 1
 
         response = storage_subnet.protocol.Store(
-            ptype=synapse.ptype,
-            pad_len=synapse.pad_len,
+            chunk_idx=synapse.chunk_idx,
+            piece_idx=synapse.piece_idx,
+            piece_type=synapse.piece_type,
             piece_id=piece_id,
         )
 
