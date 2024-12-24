@@ -15,7 +15,7 @@ from storage_subnet.utils.piece import (
 TEST_FILE_SIZE = 1024 * 1024
 
 
-def test_split_file():
+def test_split_data():
     data = randbytes(TEST_FILE_SIZE)
     headers = {"content-type": "application/octet-stream"}
     file: UploadFile = UploadFile(file=BytesIO(data), filename="test", headers=headers)
@@ -45,7 +45,7 @@ def test_split_file():
     ), f"Mismatch in piece counts! Expected {expected_pieces}, got {len(pieces)}"
 
 
-def test_reconstruct_file():
+def test_reconstruct_data():
     data = randbytes(TEST_FILE_SIZE)
     headers = {"content-type": "application/octet-stream"}
     file: UploadFile = UploadFile(file=BytesIO(data), filename="test", headers=headers)
@@ -80,7 +80,7 @@ def test_reconstruct_file():
     assert data == reconstructed_data, "Data mismatch!"
 
 
-def test_reconstruct_file_corrupted():
+def test_reconstruct_data_corrupted():
     data = randbytes(TEST_FILE_SIZE)
     headers = {"content-type": "application/octet-stream"}
     file: UploadFile = UploadFile(file=BytesIO(data), filename="test", headers=headers)
