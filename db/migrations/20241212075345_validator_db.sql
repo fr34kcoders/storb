@@ -1,9 +1,9 @@
 -- migrate:up
 
 -- Table for mapping infohash to piece IDs
-CREATE TABLE infohash_piece_ids (
+CREATE TABLE infohash_chunk_ids (
     infohash TEXT PRIMARY KEY, -- Infohash 
-    piece_ids TEXT             -- JSON string representing piece IDs
+    chunk_ids TEXT             -- JSON string representing chunk IDs
 );
 
 -- Table for metadata associated with files
@@ -54,4 +54,4 @@ DROP TABLE IF EXISTS piece_id_miner_uids;
 DROP TABLE IF EXISTS metadata;
 
 -- Drop the table mapping infohash to piece IDs
-DROP TABLE IF EXISTS infohash_piece_ids;
+DROP TABLE IF EXISTS infohash_chunk_ids;

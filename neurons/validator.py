@@ -21,10 +21,8 @@ import base64
 import hashlib
 import logging
 import logging.config
-import queue
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Generator, Iterable
 
 import aiosqlite
 import bittensor as bt
@@ -51,6 +49,7 @@ from storage_subnet.constants import (
     LogColor,
 )
 from storage_subnet.dht.base_dht import DHT
+from storage_subnet.dht.piece_dht import ChunkDHTValue, PieceDHTValue
 from storage_subnet.dht.tracker_dht import TrackerDHTValue
 from storage_subnet.protocol import (
     GetMiners,
@@ -67,12 +66,16 @@ from storage_subnet.utils.logging import (
     setup_rotating_logger,
 )
 from storage_subnet.utils.piece import (
+    EncodedChunk,
+    Piece,
+    ProcessedPieceInfo,
+    encode_chunk,
     piece_hash,
     piece_length,
-    split_file,
+    reconstruct_data_stream,
 )
 from storage_subnet.utils.uids import get_random_uids
-from storage_subnet.validator import forward, query_miner, query_multiple_miners
+from storage_subnet.validator import query_miner, query_multiple_miners
 from storage_subnet.validator.reward import get_response_rate_scores
 
 
@@ -112,12 +115,12 @@ class Validator(BaseValidatorNeuron):
         """
         Retrieve the list of miners responsible for storing the pieces of a file based on its infohash.
 
-        This method looks up all piece IDs associated with the provided infohash from a local tracker database, 
-        and then retrieves the corresponding miner IDs from the DHT. If no pieces are found, an HTTP 404 error 
+        This method looks up all piece IDs associated with the provided infohash from a local tracker database,
+        and then retrieves the corresponding miner IDs from the DHT. If no pieces are found, an HTTP 404 error
         is raised. If the lookup for any piece's miner fails, an HTTP 500 error is raised.
 
         :param synapse: A GetMiners instance containing the infohash to look up piece IDs and miners for.
-        :return: A GetMiners instance populated with the provided infohash, the associated piece IDs, 
+        :return: A GetMiners instance populated with the provided infohash, the associated piece IDs,
                  and the IDs of the miners that store those pieces.
         :raises HTTPException:
             - 404 if no pieces are found for the given infohash.
@@ -126,30 +129,47 @@ class Validator(BaseValidatorNeuron):
         # Get the pieces from local tracker db
         infohash = synapse.infohash
 
-        piece_ids = None
+        chunk_ids = []
+        chunks_metadatas = []
+        multi_piece_meta = []
+
         async with db.get_db_connection(db_dir=self.config.db_dir) as conn:
-            # TODO: erm we shouldn't need to access the array of piece ids like this?
-            # something might be wrong with get_pieces_from_infohash()
-            piece_ids = (await db.get_pieces_from_infohash(conn, infohash))["piece_ids"]
-        if piece_ids is None:
+            # TODO: erm we shouldn't need to access the array of chunk ids like this?
+            # something might be wrong with get_chunks_from_infohash()
+            chunk_ids = (await db.get_chunks_from_infohash(conn, infohash))["chunk_ids"]
+
+        if chunk_ids is None:
             raise HTTPException(
                 status_code=HTTP_404_NOT_FOUND,
-                detail="No pieces found for the given infohash",
+                detail="No chunks found for the given infohash",
             )
 
-        miners = []
-        for piece_id in piece_ids:
-            try:
-                piece_metadata = await self.dht.get_piece_entry(piece_id)
-                miners.append(piece_metadata.miner_id)
-            except Exception as e:
-                bt.logging.error(f"Failed to get miner for piece_id {piece_id}: {e}")
-                raise HTTPException(
-                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to get miner for piece_id {piece_id}: {e}",
-                )
+        for chunk_id in chunk_ids:
+            piece_ids = None
+            chunks_metadata = await self.dht.get_chunk_entry(chunk_id)
+            chunks_metadatas.append(chunks_metadata)
+            piece_ids = chunks_metadata.piece_hashes
+            pieces_metadata: list[PieceDHTValue] = []
+            for piece_id in piece_ids:
+                try:
+                    piece = await self.dht.get_piece_entry(piece_id)
+                    pieces_metadata.append(piece)
+                except Exception as e:
+                    bt.logging.error(
+                        f"Failed to get miner for piece_id {piece_id}: {e}"
+                    )
+                    raise HTTPException(
+                        status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to get miner for piece_id {piece_id}: {e}",
+                    )
+            multi_piece_meta.append(pieces_metadata)
 
-        response = GetMiners(infohash=infohash, piece_ids=piece_ids, miners=miners)
+        response = GetMiners(
+            infohash=infohash,
+            chunk_ids=chunk_ids,
+            chunks_metadata=chunks_metadatas,
+            pieces_metadata=multi_piece_meta,
+        )
 
         return response
 
@@ -250,17 +270,8 @@ class Validator(BaseValidatorNeuron):
 core_validator = None
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    app.state.dht = core_validator.dht
-    try:
-        yield
-    finally:
-        await core_validator.dht.stop()
-
-
 # API setup
-app = FastAPI(debug=False, lifespan=lifespan)
+app = FastAPI(debug=False)
 
 
 # logging middleware
@@ -314,10 +325,9 @@ async def obtain_metadata(infohash: str) -> MetadataResponse:
 
 @app.get("/metadata/dht/", response_model=MetadataResponse)
 async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataResponse:
-    dht: DHT = request.app.state.dht
     bt.logging.info(f"Retrieving metadata for infohash: {infohash}")
     try:
-        metadata = await dht.get_tracker_entry(infohash)
+        metadata = await core_validator.dht.get_tracker_entry(infohash)
         return MetadataResponse(
             infohash=infohash,
             filename=metadata.filename,
@@ -331,8 +341,7 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
 
 # Upload Helper Functions
 async def process_pieces(
-    piece_generator: Iterable[tuple[str, bytes, int]],
-    piece_size: int,
+    pieces: list[Piece],
     uids: list[str],
     core_validator: Validator,
 ) -> tuple[list[str], list[tuple[str, bytes, int]]]:
@@ -344,7 +353,6 @@ async def process_pieces(
             - ptype (str): The type of the piece.
             - data (bytes): The data of the piece.
             - pad (int): The padding length of the piece.
-        piece_size (int): The size of each piece in bytes.
         uids (list[str]): A list of unique identifiers for the miners.
         core_validator (Validator): The core validator instance used for querying miners.
 
@@ -378,22 +386,35 @@ async def process_pieces(
 
         to_query = []  # Reset the batch
 
-    for idx, (ptype, data, pad) in enumerate(piece_generator):
-        p_hash = piece_hash(data)
+    for idx, piece_info in enumerate(pieces):
+        p_hash = piece_hash(piece_info.data)
         piece_hashes.append(p_hash)
-        processed_pieces.append((ptype, data, pad))
-
-        # Log details
-        bt.logging.trace(
-            f"piece{idx} | type: {ptype} | piece size: {piece_size} bytes | hash: {p_hash} | b64 preview: {data[:10]}"
+        processed_pieces.append(
+            ProcessedPieceInfo(
+                chunk_idx=piece_info.chunk_idx,
+                piece_type=piece_info.piece_type,
+                piece_idx=piece_info.piece_idx,
+                data=piece_info.data,
+                piece_id=p_hash,
+            )
         )
 
-        # Prepare the query for miners
-        b64_encoded_piece = base64.b64encode(data).decode("utf-8")
+        # Log details
+        # TODO: we base64 encode the data before sending it to the miner(s) for now
+        b64_encoded_piece = base64.b64encode(piece_info.data).decode("utf-8")
+        bt.logging.trace(
+            f"piece{idx} | type: {piece_info.piece_type} | hash: {p_hash} | b64 preview: {piece_info.data[:10]}"
+        )
+
         task = asyncio.create_task(
             query_multiple_miners(
                 core_validator,
-                synapse=Store(ptype=ptype, piece=b64_encoded_piece, pad_len=pad),
+                synapse=Store(
+                    chunk_idx=piece_info.chunk_idx,
+                    piece_type=piece_info.piece_type,
+                    piece_idx=piece_info.piece_idx,
+                    data=b64_encoded_piece,
+                ),
                 uids=uids,
             )
         )
@@ -426,7 +447,6 @@ async def process_pieces(
 
 
 async def store_in_dht(
-    dht: DHT,
     validator_id: int,
     infohash: str,
     filename: str,
@@ -450,7 +470,7 @@ async def store_in_dht(
         HTTPException: If storing the tracker entry in the DHT fails.
     """
     try:
-        await dht.store_tracker_entry(
+        await core_validator.dht.store_tracker_entry(
             infohash,
             TrackerDHTValue(
                 validator_id=validator_id,
@@ -470,7 +490,6 @@ async def store_in_dht(
 
 @app.post("/store/", response_model=StoreResponse)
 async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
-    dht: DHT = req.app.state.dht
     validator_id = core_validator.uid
     try:
         if not file.filename:
@@ -489,17 +508,16 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                 status_code=HTTP_400_BAD_REQUEST, detail=f"Invalid file size: {e}"
             )
 
-        # Read the entire file content for checksum
-        file_content = await file.read()
-        og_checksum = hashlib.sha256(file_content).hexdigest()
-        file.file.seek(0)
+        # file metadata
         filename = file.filename
         filesize = file.size
-        bt.logging.trace(f"file checksum: {og_checksum}")
 
         # Use constants for data/parity pieces
         data_pieces = EC_DATA_SIZE
         parity_pieces = EC_PARITY_SIZE
+
+        # chunk size to read in each iteration
+        chunk_size = piece_length(filesize)
 
         timestamp = str(datetime.now(UTC).timestamp())
 
@@ -513,15 +531,40 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         ]
         bt.logging.info(f"uids to query: {uids}")
 
-        pieces_generator = split_file(file, piece_size, data_pieces, parity_pieces)
+        chunk_hashes = []
+        piece_hashes = []
 
-        # process pieces, send them to miners, and update their stats
-        piece_hashes, _ = await process_pieces(
-            piece_size=piece_size,
-            piece_generator=pieces_generator,
-            uids=uids,
-            core_validator=core_validator,
-        )
+        # we read the file in chunks, and then distribute it in pieces across miners
+        for chunk_idx, chunk in enumerate(
+            iter(lambda: file.file.read(chunk_size), b"")
+        ):
+            chunk_info = encode_chunk(chunk, chunk_idx)
+            sent_piece_hashes, _ = await process_pieces(
+                pieces=chunk_info.pieces,
+                uids=uids,
+                core_validator=core_validator,
+            )
+
+            piece_hashes += sent_piece_hashes
+
+            dht_chunk = ChunkDHTValue(
+                piece_hashes=sent_piece_hashes,
+                chunk_idx=chunk_info.chunk_idx,
+                k=chunk_info.k,
+                m=chunk_info.m,
+                chunk_size=chunk_info.chunk_size,
+                padlen=chunk_info.padlen,
+                original_chunk_length=chunk_info.original_chunk_length,
+            )
+
+            chunk_hash = hashlib.sha1(
+                dht_chunk.model_dump_json().encode("utf-8")
+            ).hexdigest()
+
+            await core_validator.dht.store_chunk_entry(chunk_hash, dht_chunk)
+            chunk_hashes.append(chunk_hash)
+
+            # TODO: score responses - consider responses that return the piece id to be successful?
 
         # Generate infohash
         infohash, _ = generate_infohash(
@@ -535,7 +578,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
             async with db.get_db_connection(
                 db_dir=core_validator.config.db_dir
             ) as conn:
-                await db.store_infohash_piece_ids(conn, infohash, piece_hashes)
+                await db.store_infohash_chunk_ids(conn, infohash, chunk_hashes)
                 await db.store_metadata(
                     conn, infohash, filename, timestamp, piece_size, filesize
                 )
@@ -550,15 +593,18 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                 detail=f"Unexpected database error: {e}",
             )
 
-        # Store metadata in the DHT
-        await store_in_dht(
-            dht=dht,
-            validator_id=validator_id,
-            infohash=infohash,
-            filename=filename,
-            filesize=filesize,
-            piece_size=piece_size,
-            piece_count=len(piece_hashes),
+        # Store data object metadata in the DHT
+        await core_validator.dht.store_tracker_entry(
+            infohash,
+            TrackerDHTValue(
+                validator_id=validator_id,
+                filename=filename,
+                length=filesize,
+                chunk_length=chunk_size,
+                chunk_count=len(chunk_hashes),
+                chunk_hashes=chunk_hashes,
+                creation_timestamp=timestamp,
+            ),
         )
 
         bt.logging.info(f"Uploaded file with infohash: {infohash}")
@@ -593,34 +639,52 @@ async def retrieve_file(infohash: str):
         uid=validator_to_ask,
     )
 
+    # TODO get each group of miners per chunk instead of all at once?
+    async with db.get_db_connection(core_validator.config.db_dir) as conn:
+        miner_stats = await db.get_all_miner_stats(conn)
+
     bt.logging.info(f"Response from validator {validator_to_ask}: {response}")
 
-    piece_ids = response.piece_ids
-    miners = response.miners
+    piece_ids = []
+    pieces = []
+    chunks = []
+    responses = []
 
-    async with db.get_db_connection(core_validator.config.db_dir) as conn:
-        miner_stats = await db.get_multiple_miner_stats(conn, miners)
+    # TODO: check if the lengths of the chunk ids and chunks_metadata are the same
+    for idx, chunk_id in enumerate(response.chunk_ids):
+        chunks_metadata: ChunkDHTValue = response.chunks_metadata[idx]
+        chunk = EncodedChunk(
+            chunk_idx=chunks_metadata.chunk_idx,
+            k=chunks_metadata.k,
+            m=chunks_metadata.m,
+            chunk_size=chunks_metadata.chunk_size,
+            padlen=chunks_metadata.padlen,
+            original_chunk_length=chunks_metadata.original_chunk_length,
+        )
+        chunks.append(chunk)
 
-    # TODO: check if piece_ids and miners lengths are the same
-    # TODO: many of these can be moved around and placed into their own functions
+        chunk_pieces_metadata = response.pieces_metadata[idx]
 
-    # get piece(s) from miner(s)
-    to_query = []
-    for idx, miner_uid in enumerate(miners):
-        piece_id = piece_ids[idx]
-        synapse = Retrieve(piece_id=piece_id)
-        to_query.append(
-            asyncio.create_task(
-                query_miner(
-                    self=core_validator,
-                    synapse=synapse,
-                    uid=miner_uid,
-                    deserialize=True,
+        to_query = []
+        for piece_idx, piece_id in enumerate(chunks_metadata.piece_hashes):
+            piece_ids.append(piece_id)
+            # TODO: many of these can be moved around and placed into their own functions
+
+            # get piece(s) from miner(s)
+            synapse = Retrieve(piece_id=piece_id)
+            to_query.append(
+                asyncio.create_task(
+                    query_miner(
+                        self=core_validator,
+                        synapse=synapse,
+                        uid=chunk_pieces_metadata[piece_idx].miner_id,
+                        deserialize=True,
+                    )
                 )
             )
-        )
 
-    responses: list[tuple[int, Retrieve]] = await asyncio.gather(*to_query)
+        chunk_responses: list[tuple[int, Retrieve]] = await asyncio.gather(*to_query)
+        responses += chunk_responses
 
     # TODO: optimize the rest of this
     # check integrity of file if found
@@ -638,6 +702,17 @@ async def retrieve_file(infohash: str):
         # TODO: do we want to go through all the pieces/uids before returning the error?
         # perhaps we can return an error response, and after we can continue scoring the
         # miners in the background?
+
+        piece_meta = None
+        try:
+            # TODO: this is probably very inefficient because we got
+            # pieces_metadata in the response from the validator
+            # cba rn but should probs get around to addressing this later
+            piece_meta = await core_validator.dht.get_piece_entry(piece_id)
+        except Exception as e:
+            bt.logging.error(e)
+            piece_meta = None
+
         if piece_id != piece_ids[idx]:
             piece_ids_match = False
             latencies[miner_uid] = QUERY_TIMEOUT
@@ -646,17 +721,25 @@ async def retrieve_file(infohash: str):
             miner_stats[miner_uid]["total_successes"] += 1
             latencies[miner_uid] = response.dendrite.process_time
 
+        piece = Piece(
+            chunk_idx=piece_meta.chunk_idx,
+            piece_idx=piece_meta.piece_idx,
+            piece_type=piece_meta.piece_type,
+            data=decoded_piece,
+        )
+
+        pieces.append(piece)
         response_piece_ids.append(piece_id)
 
     bt.logging.debug(f"tracker_dht: {tracker_dht}")
 
     # update miner(s) stats in validator db
     async with db.get_db_connection(core_validator.config.db_dir) as conn:
-        for miner_uid in miners:
+        for miner_uid, miner_stat in miner_stats.items():
             await db.update_stats(
                 conn,
                 miner_uid=miner_uid,
-                stats=miner_stats[miner_uid],
+                stats=miner_stat,
             )
 
     if not piece_ids_match:
@@ -674,29 +757,15 @@ async def retrieve_file(infohash: str):
         core_validator.latencies / core_validator.latencies.max()
     )
 
-    # stream the pieces as a file
-    buffer = queue.Queue()
-
-    # Function to add items to the buffer
-    async def fill_buffer():
-        for _, response in responses:
-            piece = base64.b64decode(response.piece.encode("utf-8"))
-            buffer.put(piece)  # Add to buffer
-        buffer.put(None)  # Signal end of stream by adding None
-
-    # Function to generate the stream
-    def stream_from_buffer() -> Generator[bytes, None, None]:
-        while True:
-            chunk = buffer.get()  # Block until data is available
-            if chunk is None:  # If None is received, end of the stream
-                break
-            yield chunk  # Yield the data chunk to the client
-
-    asyncio.create_task(fill_buffer())
+    # We'll pass them to the streaming generator function:
+    def file_generator():
+        yield from reconstruct_data_stream(pieces, chunks)
 
     headers = {"Content-Disposition": f"attachment; filename={tracker_dht.filename}"}
     return StreamingResponse(
-        stream_from_buffer(), media_type="application/octet-stream", headers=headers
+        file_generator(),
+        media_type="application/octet-stream",
+        headers=headers,
     )
 
 

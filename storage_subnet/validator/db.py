@@ -11,7 +11,7 @@ import aiosqlite
 DB_DIR = "validator_database.db"
 PIECE_ID_MINER_UIDS = "piece_id_miner_uids"
 METADATA = "metadata"
-INFOHASH_PIECE_IDS = "infohash_piece_ids"
+INFOHASH_CHUNK_IDS = "infohash_chunk_ids"
 
 
 @asynccontextmanager
@@ -96,15 +96,15 @@ async def update_stats(conn: aiosqlite.Connection, miner_uid: int, stats: dict):
     await conn.commit()
 
 
-async def store_infohash_piece_ids(
-    conn: aiosqlite.Connection, infohash: str, piece_ids: list[str]
+async def store_infohash_chunk_ids(
+    conn: aiosqlite.Connection, infohash: str, chunk_ids: list[str]
 ) -> None:
-    dict_piece_ids = {"piece_ids": piece_ids}
-    query = f"INSERT INTO {INFOHASH_PIECE_IDS} VALUES (?, ?)"
+    dict_chunk_ids = {"chunk_ids": chunk_ids}
+    query = f"INSERT INTO {INFOHASH_CHUNK_IDS} VALUES (?, ?)"
 
     await conn.execute(
         query,
-        (infohash, json.dumps(dict_piece_ids)),
+        (infohash, json.dumps(dict_chunk_ids)),
     )
     await conn.commit()
 
@@ -150,10 +150,10 @@ async def get_metadata(
 
 
 # TODO: get stuff
-async def get_pieces_from_infohash(
+async def get_chunks_from_infohash(
     conn: aiosqlite.Connection, infohash: str
 ) -> Optional[list[str]]:  # noqa: F821
-    query = f"SELECT piece_ids FROM {INFOHASH_PIECE_IDS} WHERE infohash = ?"
+    query = f"SELECT chunk_ids FROM {INFOHASH_CHUNK_IDS} WHERE infohash = ?"
 
     cur = await conn.execute(query, (infohash,))  # Use a tuple for parameters
     row = await cur.fetchone()
@@ -161,4 +161,4 @@ async def get_pieces_from_infohash(
     if row is None:
         return None
 
-    return json.loads(row["piece_ids"])  # Extract JSON from the result
+    return json.loads(row["chunk_ids"])  # Extract JSON from the result
