@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import os
 import random
 from math import gcd
@@ -8,7 +9,6 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.utils import int_to_bytes
 
 # Constants
-DEFAULT_BLOCK_SIZE = 4096
 DEFAULT_RSA_KEY_SIZE = 2048
 
 
@@ -33,9 +33,9 @@ class CryptoUtils:
         return int.from_bytes(hashed, "big") % rsa_key.public_key().public_numbers().n
 
     @staticmethod
-    def prf_aes(key: bytes, input_int: int, out_len=16) -> bytes:
+    def prf(key: bytes, input_int: int, out_len=16) -> bytes:
         """
-        Psuedo-random function using AES encryption (using Fernet symmetric encryption)
+        Psuedo-random function using HMAC-SHA256
 
         Arguments:
             key (bytes): Key used for encryption
@@ -47,14 +47,13 @@ class CryptoUtils:
         """
         if not key or len(key) == 0:
             raise APDPError("Invalid key for PRF")
-        cipher = Fernet(key)
         block = int_to_bytes(input_int, out_len)
-        return cipher.encrypt(block)
+        return hmac.digest(key, block, hashlib.sha256)
 
     @staticmethod
     def generate_prp_indices(key: bytes, num_blocks: int, c: int) -> list[int]:
         """
-        Generate c unique indices from [0, num_blocks-1] using prf_aes
+        Generate c unique indices from [0, num_blocks-1] using prf
         Arguments:
             key (bytes):
             num_blocks (int):
@@ -68,7 +67,7 @@ class CryptoUtils:
         indices = set()
         counter = 0
         while len(indices) < c:
-            val_block = CryptoUtils.prf_aes(key, counter)
+            val_block = CryptoUtils.prf(key, counter)
             val = int.from_bytes(val_block, "big")
             indices.add(val % num_blocks)
             counter += 1
@@ -148,7 +147,7 @@ class Proof:
 class ChallengeSystem:
     """Encapsulates the APDP system for validator and miner operations."""
 
-    def __init__(self, block_size: int = DEFAULT_BLOCK_SIZE):
+    def __init__(self, block_size: int):
         self.key = APDPKey()
         self.block_size = block_size
 
@@ -185,7 +184,7 @@ class ChallengeSystem:
             block_int = int.from_bytes(block.ljust(self.block_size, b"\x00"), "big")
 
             # PRF value for the block index
-            prf_value = CryptoUtils.prf_aes(self.key.prf_key, index)
+            prf_value = CryptoUtils.prf(self.key.prf_key, index)
             fdh_hash = CryptoUtils.full_domain_hash(self.key.rsa, prf_value)
             block_int %= phi
 
@@ -254,7 +253,7 @@ class ChallengeSystem:
             block = data[index * self.block_size : (index + 1) * self.block_size]
             block_int = int.from_bytes(block.ljust(self.block_size, b"\x00"), "big")
 
-            prf_result = CryptoUtils.prf_aes(challenge.prf_key, j)
+            prf_result = CryptoUtils.prf(challenge.prf_key, j)
             coefficient = int.from_bytes(prf_result) % n
 
             tag = tags[index]
@@ -303,7 +302,7 @@ class ChallengeSystem:
             if index < 0 or index >= len(tags):
                 raise APDPError("Invalid index during verification")
 
-            prf_result = CryptoUtils.prf_aes(challenge.prf_key, j)
+            prf_result = CryptoUtils.prf(challenge.prf_key, j)
             coefficient = int.from_bytes(prf_result, "big") % n
             prf_value = tags[index].prf_value
             fdh_hash = CryptoUtils.full_domain_hash(self.key.rsa, prf_value)
