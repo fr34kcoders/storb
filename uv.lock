@@ -1441,7 +1441,7 @@ wheels = [
 
 [[package]]
 name = "storage-subnet"
-version = "0.0.1"
+version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -1459,7 +1459,7 @@ dependencies = [
     { name = "zfec" },
 ]
 
-[package.dependency-groups]
+[package.dev-dependencies]
 dev = [
     { name = "debugpy" },
     { name = "py-spy" },
@@ -1484,7 +1484,7 @@ requires-dist = [
     { name = "zfec", specifier = ">=1.6.0.0" },
 ]
 
-[package.metadata.dependency-groups]
+[package.metadata.requires-dev]
 dev = [
     { name = "debugpy", specifier = ">=1.8.9" },
     { name = "py-spy", specifier = ">=0.4.0" },

@@ -1,6 +1,6 @@
 [project]
 name = "storage_subnet"
-version = "0.0.1"
+version = "0.1.0"
 description = "A storage subnet on Bittensor"
 readme = "README.md"
 license = { file = "LICENSE" }
