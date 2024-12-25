@@ -1,59 +1,75 @@
 import hashlib
 import os
 import random
-from typing import List
+from math import gcd
 
-from Crypto.Cipher import AES
-from Crypto.PublicKey import RSA
-from Crypto.Random import get_random_bytes
-from Crypto.Util.number import GCD, bytes_to_long, inverse, long_to_bytes
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.utils import int_to_bytes
 
 # Constants
 DEFAULT_BLOCK_SIZE = 4096
-DEFAULT_PRF_KEY_SIZE = 16
-DEFAULT_PRP_KEY_SIZE = 16
-DEFAULT_RSA_KEY_SIZE = 1024
+DEFAULT_RSA_KEY_SIZE = 2048
 
 
-class ApdpError(Exception):
+class APDPError(Exception):
     """Custom exception for APDP-related errors."""
 
     pass
 
 
-class CryptographicUtils:
+class CryptoUtils:
     """Utility class for cryptographic operations."""
 
     @staticmethod
-    def full_domain_hash(rsa_key, data: bytes) -> int:
+    def generate_rsa_private_key(key_size: int) -> rsa.RSAPrivateKey:
+        return rsa.generate_private_key(public_exponent=65537, key_size=key_size)
+
+    @staticmethod
+    def full_domain_hash(rsa_key: rsa.RSAPrivateKey, data: bytes) -> int:
         if rsa_key is None or data is None:
-            raise ApdpError("Invalid parameters for full_domain_hash")
+            raise APDPError("Invalid parameters for full_domain_hash")
         hashed = hashlib.sha256(data).digest()
-        return bytes_to_long(hashed) % rsa_key.n
+        return int.from_bytes(hashed, "big") % rsa_key.public_key().public_numbers().n
 
     @staticmethod
     def prf_aes(key: bytes, input_int: int, out_len=16) -> bytes:
+        """
+        Psuedo-random function using AES encryption (using Fernet symmetric encryption)
+
+        Arguments:
+            key (bytes): Key used for encryption
+            input_int (int): Input integer to encrypt
+            out_len (int): Length of output block
+
+        Returns:
+            bytes: Encrypted block
+        """
         if not key or len(key) == 0:
-            raise ApdpError("Invalid key for PRF")
-        cipher = AES.new(key, AES.MODE_ECB)
-        block = long_to_bytes(input_int, out_len)
+            raise APDPError("Invalid key for PRF")
+        cipher = Fernet(key)
+        block = int_to_bytes(input_int, out_len)
         return cipher.encrypt(block)
 
     @staticmethod
-    def prf_f(key: bytes, index: int) -> bytes:
-        if key is None:
-            raise ApdpError("No key provided to PRF")
-        return CryptographicUtils.prf_aes(key, index, len(key))
+    def generate_prp_indices(key: bytes, num_blocks: int, c: int) -> list[int]:
+        """
+        Generate c unique indices from [0, num_blocks-1] using prf_aes
+        Arguments:
+            key (bytes):
+            num_blocks (int):
+            c (int):
 
-    @staticmethod
-    def generate_prp_indices(key: bytes, num_blocks: int, c: int) -> List[int]:
+        Returns:
+            list[int]: The list of c unique indices
+        """
         if key is None or num_blocks <= 0 or c <= 0:
-            raise ApdpError("Invalid parameters for generate_prp_indices")
+            raise APDPError("Invalid parameters for generate_prp_indices")
         indices = set()
         counter = 0
         while len(indices) < c:
-            val_block = CryptographicUtils.prf_f(key, counter)
-            val = bytes_to_long(val_block)
+            val_block = CryptoUtils.prf_aes(key, counter)
+            val = int.from_bytes(val_block, "big")
             indices.add(val % num_blocks)
             counter += 1
         return list(indices)
@@ -69,24 +85,26 @@ class APDPKey:
 
     def generate(self, rsa_bits=DEFAULT_RSA_KEY_SIZE):
         if rsa_bits <= 0:
-            raise ApdpError("Invalid RSA key size")
-        self.rsa = RSA.generate(rsa_bits)
+            raise APDPError("Invalid RSA key size")
+        self.rsa = rsa.generate_private_key(public_exponent=65537, key_size=rsa_bits)
         if self.rsa is None:
-            raise ApdpError("Failed to generate RSA key")
+            raise APDPError("Failed to generate RSA key")
 
+        n = self.rsa.public_key().public_numbers().n
         # Choose g
         for _ in range(1000):
-            candidate = random.randint(2, self.rsa.n - 2)
-            g_candidate = pow(candidate, 2, self.rsa.n)
+            candidate = random.randint(2, n - 2)
+            g_candidate = pow(candidate, 2, n)
             if g_candidate not in (0, 1):
                 self.g = g_candidate
                 break
         if self.g is None:
-            raise ApdpError("Failed to find suitable generator g")
+            raise APDPError("Failed to find suitable generator g")
 
-        self.prf_key = get_random_bytes(DEFAULT_PRF_KEY_SIZE)
+        # Generate a random key for Fernet-based PRF (32 bytes).
+        self.prf_key = Fernet.generate_key()
         if self.prf_key is None:
-            raise ApdpError("Failed to generate PRF key")
+            raise APDPError("Failed to generate PRF key")
 
     def clear(self):
         self.rsa = None
@@ -108,7 +126,7 @@ class Challenge:
 
     def __init__(self, num_blocks, prp_key: bytes, prf_key: bytes, s: int, g_s: int):
         if num_blocks <= 0 or not prp_key or not prf_key:
-            raise ApdpError("Invalid challenge parameters")
+            raise APDPError("Invalid challenge parameters")
         self.num_blocks = num_blocks
         self.prp_key = prp_key
         self.prf_key = prf_key
@@ -137,44 +155,50 @@ class ChallengeSystem:
     def initialize_keys(self, rsa_bits=DEFAULT_RSA_KEY_SIZE):
         """Initialize validator with keys."""
         if rsa_bits <= 0:
-            raise ApdpError("RSA bits must be positive")
+            raise APDPError("RSA bits must be positive")
         self.key.generate(rsa_bits)
 
-    def generate_tags(self, data: bytes) -> List[APDPTag]:
+    def generate_tags(self, data: bytes) -> list[APDPTag]:
         """Generate tags for each block of data."""
         if self.key.rsa is None or self.key.g is None or self.key.prf_key is None:
-            raise ApdpError("Keys are not initialized")
+            raise APDPError("Keys are not initialized")
 
         if data is None or len(data) == 0:
-            raise ApdpError("No data to generate tags")
+            raise APDPError("No data to generate tags")
 
         num_blocks = (len(data) + self.block_size - 1) // self.block_size
         if num_blocks == 0:
-            raise ApdpError("No blocks computed from the given data")
+            raise APDPError("No blocks computed from the given data")
 
         tags = []
 
+        n = self.key.rsa.public_key().public_numbers().n
+        phi = (self.key.rsa.private_numbers().p - 1) * (
+            self.key.rsa.private_numbers().q - 1
+        )
+
+        if phi <= 0:
+            raise APDPError("Invalid RSA parameters")
+
         for index in range(num_blocks):
             block = data[index * self.block_size : (index + 1) * self.block_size]
-            block_int = bytes_to_long(block.ljust(self.block_size, b"\x00"))
+            block_int = int.from_bytes(block.ljust(self.block_size, b"\x00"), "big")
 
-            prf_value = CryptographicUtils.prf_f(self.key.prf_key, index)
-            fdh_hash = CryptographicUtils.full_domain_hash(self.key.rsa, prf_value)
-
-            phi = (self.key.rsa.p - 1) * (self.key.rsa.q - 1)
+            # PRF value for the block index
+            prf_value = CryptoUtils.prf_aes(self.key.prf_key, index)
+            fdh_hash = CryptoUtils.full_domain_hash(self.key.rsa, prf_value)
             block_int %= phi
 
-            # Check for zero or invalid parameters
-            if phi <= 0:
-                raise ApdpError("Invalid RSA parameters")
+            # # Check for zero or invalid parameters
+            # if phi <= 0:
+            #     raise APDPError("Invalid RSA parameters")
 
             try:
-                base = (
-                    fdh_hash * pow(self.key.g, block_int, self.key.rsa.n)
-                ) % self.key.rsa.n
-                tag_value = pow(base, self.key.rsa.d, self.key.rsa.n)
+                base = (fdh_hash * pow(self.key.g, block_int, n)) % n
+                d = self.key.rsa.private_numbers().d
+                tag_value = pow(base, d, n)
             except ValueError:
-                raise ApdpError("Failed to compute tag value")
+                raise APDPError("Failed to compute tag value")
 
             tags.append(APDPTag(index, tag_value, prf_value))
 
@@ -183,37 +207,40 @@ class ChallengeSystem:
     def issue_challenge(self, num_blocks: int) -> Challenge:
         """Issue a challenge to the miner."""
         if self.key.rsa is None or self.key.g is None:
-            raise ApdpError("Keys are not initialized")
+            raise APDPError("Keys are not initialized")
 
         if num_blocks <= 0:
-            raise ApdpError("Number of blocks must be positive")
+            raise APDPError("Number of blocks must be positive")
 
-        s = random.randint(2, self.key.rsa.n - 1)
+        n = self.key.rsa.public_key().public_numbers().n
+        s = random.randint(2, n - 1)
         # Ensure s is in Z*_n
         attempt_count = 0
-        while GCD(s, self.key.rsa.n) != 1:
-            s = random.randint(2, self.key.rsa.n - 1)
+        while gcd(s, n) != 1:
+            s = random.randint(2, n - 1)
             attempt_count += 1
             if attempt_count > 10000:
-                raise ApdpError("Failed to find suitable s in Z*_n")
+                raise APDPError("Failed to find suitable s in Z*_n")
 
-        g_s = pow(self.key.g, s, self.key.rsa.n)
-        prp_key = get_random_bytes(DEFAULT_PRP_KEY_SIZE)
-        prf_key = get_random_bytes(DEFAULT_PRF_KEY_SIZE)
+        g_s = pow(self.key.g, s, n)
+        prp_key = Fernet.generate_key()
+        prf_key = Fernet.generate_key()
 
         return Challenge(num_blocks, prp_key, prf_key, s, g_s)
 
     def generate_proof(
-        self, data: bytes, tags: List[APDPTag], challenge: Challenge
+        self, data: bytes, tags: list[APDPTag], challenge: Challenge
     ) -> Proof:
         """Generate a proof for the given challenge."""
         if not tags or challenge is None:
-            raise ApdpError("Invalid tags or challenge for proof generation")
+            raise APDPError("Invalid tags or challenge for proof generation")
 
         if len(tags) < challenge.num_blocks:
-            raise ApdpError("Not enough tags to satisfy challenge")
+            raise APDPError("Not enough tags to satisfy challenge")
 
-        indices = CryptographicUtils.generate_prp_indices(
+        n = self.key.rsa.public_key().public_numbers().n
+
+        indices = CryptoUtils.generate_prp_indices(
             challenge.prp_key, len(tags), challenge.num_blocks
         )
 
@@ -222,85 +249,86 @@ class ChallengeSystem:
 
         for j, index in enumerate(indices):
             if index < 0 or index >= len(tags):
-                raise ApdpError("Invalid block index in challenge")
+                raise APDPError("Invalid block index in challenge")
 
             block = data[index * self.block_size : (index + 1) * self.block_size]
-            block_int = bytes_to_long(block.ljust(self.block_size, b"\x00"))
+            block_int = int.from_bytes(block.ljust(self.block_size, b"\x00"), "big")
 
-            prf_result = CryptographicUtils.prf_f(challenge.prf_key, j)
-            coefficient = bytes_to_long(prf_result) % self.key.rsa.n
+            prf_result = CryptoUtils.prf_aes(challenge.prf_key, j)
+            coefficient = int.from_bytes(prf_result) % n
 
             tag = tags[index]
             # Safeguard against invalid tag
             if tag is None or tag.tag_value is None:
-                raise ApdpError("Missing or invalid tag")
+                raise APDPError("Missing or invalid tag")
 
             try:
                 aggregated_tag = (
-                    aggregated_tag * pow(tag.tag_value, coefficient, self.key.rsa.n)
-                ) % self.key.rsa.n
+                    aggregated_tag * pow(tag.tag_value, coefficient, n)
+                ) % n
             except ValueError:
-                raise ApdpError("Failed to aggregate tag")
+                raise APDPError("Failed to aggregate tag")
 
             aggregated_blocks += coefficient * block_int
 
-        rho_temp = pow(challenge.g_s, aggregated_blocks, self.key.rsa.n)
-        hashed_result = hashlib.sha256(long_to_bytes(rho_temp)).digest()
+        rho_temp = pow(challenge.g_s, aggregated_blocks, n)
+        hashed_result = hashlib.sha256(int_to_bytes(rho_temp)).digest()
 
         return Proof(aggregated_tag, aggregated_blocks, hashed_result)
 
     def verify_proof(
-        self, proof: Proof, challenge: Challenge, tags: List[APDPTag]
+        self, proof: Proof, challenge: Challenge, tags: list[APDPTag]
     ) -> bool:
         """Verify the proof returned by the miner."""
         if proof is None or challenge is None or not tags:
-            raise ApdpError("Invalid proof, challenge, or tags")
+            raise APDPError("Invalid proof, challenge, or tags")
 
         if self.key.rsa is None:
-            raise ApdpError("Keys not initialized")
+            raise APDPError("Keys not initialized")
+
+        n = self.key.rsa.public_key().public_numbers().n
+        e = self.key.rsa.public_key().public_numbers().e
 
         try:
-            tau = pow(proof.aggregated_tag, self.key.rsa.e, self.key.rsa.n)
+            tau = pow(proof.aggregated_tag, e, n)
         except ValueError:
-            raise ApdpError("Failed to compute tau")
+            raise APDPError("Failed to compute tau")
 
-        indices = CryptographicUtils.generate_prp_indices(
+        indices = CryptoUtils.generate_prp_indices(
             challenge.prp_key, len(tags), challenge.num_blocks
         )
 
         denominator = 1
         for j, index in enumerate(indices):
             if index < 0 or index >= len(tags):
-                raise ApdpError("Invalid index during verification")
+                raise APDPError("Invalid index during verification")
 
-            prf_result = CryptographicUtils.prf_f(challenge.prf_key, j)
-            coefficient = bytes_to_long(prf_result) % self.key.rsa.n
+            prf_result = CryptoUtils.prf_aes(challenge.prf_key, j)
+            coefficient = int.from_bytes(prf_result, "big") % n
             prf_value = tags[index].prf_value
-            fdh_hash = CryptographicUtils.full_domain_hash(self.key.rsa, prf_value)
-            denominator = (
-                denominator * pow(fdh_hash, coefficient, self.key.rsa.n)
-            ) % self.key.rsa.n
+            fdh_hash = CryptoUtils.full_domain_hash(self.key.rsa, prf_value)
+            denominator = (denominator * pow(fdh_hash, coefficient, n)) % n
 
         try:
-            denominator_inv = inverse(denominator, self.key.rsa.n)
+            denominator_inv = pow(denominator, -1, n)
         except ValueError:
-            raise ApdpError("Failed to invert denominator modulo n")
+            raise APDPError("Failed to invert denominator modulo n")
 
-        tau = (tau * denominator_inv) % self.key.rsa.n
+        tau = (tau * denominator_inv) % n
 
-        tau_s = pow(tau, challenge.s, self.key.rsa.n)
-        expected_hash = hashlib.sha256(long_to_bytes(tau_s)).digest()
+        tau_s = pow(tau, challenge.s, n)
+        expected_hash = hashlib.sha256(int_to_bytes(tau_s)).digest()
 
         return expected_hash == proof.hashed_result
 
 
 if __name__ == "__main__":
     try:
-        data = os.urandom(1024 * 10)  # 10 KiB of random data
+        data = os.urandom(1024 * 2)  # 10 KiB of random data
 
-        system = ChallengeSystem()
+        system = ChallengeSystem(block_size=1024)
         system.initialize_keys()
-        print("Validator initialized with RSA key size", system.key.rsa.size_in_bits())
+        print("Validator initialized with RSA key size", system.key.rsa.key_size)
 
         tags = system.generate_tags(data)
         print("Tags generated for", len(tags), "blocks.")
@@ -313,7 +341,7 @@ if __name__ == "__main__":
         result = system.verify_proof(proof, challenge, tags)
 
         print("Proof verification:", "Success" if result else "Failure")
-    except ApdpError as e:
+    except APDPError as e:
         print("APDP Error Occurred:", e)
     except Exception as e:
         print("Unexpected Error:", e)
