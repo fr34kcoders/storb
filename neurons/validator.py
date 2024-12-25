@@ -23,16 +23,19 @@ import logging
 import logging.config
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from typing import Any
 
 import aiosqlite
 import bittensor as bt
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
+    HTTP_401_UNAUTHORIZED,
     HTTP_404_NOT_FOUND,
+    HTTP_429_TOO_MANY_REQUESTS,
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
 
@@ -273,6 +276,61 @@ core_validator = None
 # API setup
 app = FastAPI(debug=False)
 
+def _get_api_key(request: Request) -> Any:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        return None
+    if auth_header.startswith("Bearer "):
+        return auth_header.split(" ")[1]
+
+    return auth_header
+
+
+@app.middleware("http")
+async def api_key_validator(request, call_next) -> Response:
+    if request.url.path in ["/docs", "/openapi.json", "/favicon.ico", "/redoc"]:
+        return await call_next(request)
+
+    api_key = _get_api_key(request)
+    if not api_key:
+        return JSONResponse(
+            status_code=HTTP_400_BAD_REQUEST,
+            content={"detail": "API key is missing"},
+        )
+
+    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
+        api_key_info = await db.get_api_key_info(conn, api_key)
+
+    if api_key_info is None:
+        return JSONResponse(status_code=HTTP_401_UNAUTHORIZED, content={"detail": "Invalid API key"})
+
+    credits_required = 1  # TODO: make this non-constant in the future???? (i.e. dependent on number of pools)????
+
+    # Now check credits
+    if api_key_info[db.BALANCE] is not None and api_key_info[db.BALANCE] <= credits_required:
+        return JSONResponse(
+            status_code=HTTP_429_TOO_MANY_REQUESTS,
+            content={"detail": "Insufficient credits - sorry!"},
+        )
+
+    # Now check rate limiting
+    async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
+        rate_limit_exceeded = await db.rate_limit_exceeded(conn, api_key_info)
+        if rate_limit_exceeded:
+            return JSONResponse(
+                status_code=HTTP_429_TOO_MANY_REQUESTS,
+                content={"detail": "Rate limit exceeded - sorry!"},
+            )
+
+    response: Response = await call_next(request)
+
+    bt.logging.debug(f"response: {response}")
+    if response.status_code == 200:
+        async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
+            await db.update_requests_and_credits(conn, api_key_info, credits_required)
+            await db.log_request(conn, api_key_info, request.url.path, credits_required)
+            await conn.commit()
+    return response
 
 # logging middleware
 @app.middleware("http")

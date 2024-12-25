@@ -62,3 +62,6 @@ packages = ["storage_subnet"]
 
 [tool.setuptools.package-dir]
 storage_subnet = "storage_subnet"
+
+[project.scripts]
+storb = "storage_subnet.storbcli:cli"

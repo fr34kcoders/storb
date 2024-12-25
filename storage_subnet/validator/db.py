@@ -4,14 +4,26 @@ Provides functions for interacting with validator's database
 
 import json
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from typing import Optional
 
 import aiosqlite
+
+BALANCE = "balance"
+KEY = "key"
+NAME = "name"
+
+RATE_LIMIT_PER_MINUTE = "rate_limit_per_minute"
+API_KEYS_TABLE = "api_keys"
+LOGS_TABLE = "logs"
+ENDPOINT = "endpoint"
+CREATED_AT = "created_at"
 
 DB_DIR = "validator_database.db"
 PIECE_ID_MINER_UIDS = "piece_id_miner_uids"
 METADATA = "metadata"
 INFOHASH_CHUNK_IDS = "infohash_chunk_ids"
+
 
 
 @asynccontextmanager
@@ -24,6 +36,92 @@ async def get_db_connection(db_dir: str, uri: bool = False):  # noqa: ANN201
     finally:
         await conn.close()  # Ensure the connection is properly closed
 
+async def get_api_key_info(conn: aiosqlite.Connection, api_key: str) -> dict | None:
+    row = await (await conn.execute(f"SELECT * FROM {API_KEYS_TABLE} WHERE {KEY} = ?", (api_key,))).fetchone()
+    return dict(row) if row else None
+
+
+async def get_all_api_keys(conn: aiosqlite.Connection) -> list:
+    return await (await conn.execute(f"SELECT * FROM {API_KEYS_TABLE}")).fetchall()
+
+
+async def get_all_logs_for_key(conn: aiosqlite.Connection, api_key: str) -> list:
+    return await (await conn.execute(f"SELECT * FROM {LOGS_TABLE} WHERE {KEY} = ?", (api_key,))).fetchall()
+
+
+async def get_all_logs(conn: aiosqlite.Connection) -> list:
+    return await (await conn.execute(f"SELECT * FROM {LOGS_TABLE}")).fetchall()
+
+
+async def add_api_key(
+    conn: aiosqlite.Connection,
+    api_key: str,
+    balance: float,
+    rate_limit_per_minute: int,
+    name: str,
+) -> None:
+    await conn.execute(
+        f"INSERT INTO {API_KEYS_TABLE} VALUES (?, ?, ?, ?, ?)",
+        (api_key, name, balance, rate_limit_per_minute, datetime.now()),  # noqa: DTZ005
+    )
+    await conn.commit()
+
+
+async def update_api_key_balance(conn: aiosqlite.Connection, key: str, balance: float) -> None:
+    await conn.execute(f"UPDATE {API_KEYS_TABLE} SET {BALANCE} = ? WHERE {KEY} = ?", (balance, key))
+    await conn.commit()
+
+
+async def update_api_key_rate_limit(conn: aiosqlite.Connection, key: str, rate: int) -> None:
+    await conn.execute(
+        f"UPDATE {API_KEYS_TABLE} SET {RATE_LIMIT_PER_MINUTE} = ? WHERE {KEY} = ?",
+        (rate, key),
+    )
+    await conn.commit()
+
+
+async def update_api_key_name(conn: aiosqlite.Connection, key: str, name: str) -> None:
+    await conn.execute(f"UPDATE {API_KEYS_TABLE} SET {NAME} = ? WHERE {KEY} = ?", (name, key))
+    await conn.commit()
+
+
+async def delete_api_key(conn: aiosqlite.Connection, api_key: str) -> None:
+    await conn.execute(f"DELETE FROM {API_KEYS_TABLE} WHERE {KEY} = ?", (api_key,))
+    await conn.commit()
+
+
+async def update_requests_and_credits(conn: aiosqlite.Connection, api_key_info: dict, cost: float) -> None:
+    await conn.execute(
+        f"UPDATE api_keys SET {BALANCE} = {BALANCE} - {cost} WHERE {KEY} = ?",
+        (api_key_info[KEY],),
+    )
+
+
+async def log_request(conn: aiosqlite.Connection, api_key_info: dict, path: str, cost: float) -> None:
+    info = await get_api_key_info(conn, api_key_info[KEY])
+    if isinstance(info, dict):
+        balance = info[BALANCE]
+
+        await conn.execute(
+            f"INSERT INTO {LOGS_TABLE} VALUES (?, ?, ?, ?, ?)",
+            (info[KEY], path, cost, balance, datetime.now()),  # noqa: DTZ005
+        )
+
+
+async def rate_limit_exceeded(conn: aiosqlite.Connection, api_key_info: dict) -> bool:
+    one_minute_ago = datetime.now() - timedelta(minutes=1)  # noqa: DTZ005
+
+    # Prepare a SQL statement
+    query = f"""
+        SELECT *
+        FROM logs
+        WHERE {KEY} = ? AND {CREATED_AT} >= ?
+    """
+
+    cur = await conn.execute(query, (api_key_info[KEY], one_minute_ago.strftime("%Y-%m-%d %H:%M:%S")))
+    recent_logs = await cur.fetchall()
+
+    return len(recent_logs) >= api_key_info[RATE_LIMIT_PER_MINUTE]
 
 async def get_miner_stats(conn: aiosqlite.Connection, miner_uid: int):
     query = """
