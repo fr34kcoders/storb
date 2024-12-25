@@ -1,16 +1,16 @@
-
 <div align="center">
 
 ```
-  █████████   █████                       █████    
- ███░░░░░███ ░░███                       ░░███     
-░███    ░░░  ███████    ██████  ████████  ░███████ 
-░░█████████ ░░░███░    ███░░███░░███░░███ ░███░░███
- ░░░░░░░░███  ░███    ░███ ░███ ░███ ░░░  ░███ ░███
- ███    ░███  ░███ ███░███ ░███ ░███      ░███ ░███
-░░█████████   ░░█████ ░░██████  █████     ████████ 
- ░░░░░░░░░     ░░░░░   ░░░░░░  ░░░░░     ░░░░░░░░  
-                                                   
+                                                     
+   █████████   █████                       █████     
+  ███░░░░░███ ░░███                       ░░███      
+ ░███    ░░░  ███████    ██████  ████████  ░███████  
+ ░░█████████ ░░░███░    ███░░███░░███░░███ ░███░░███ 
+  ░░░░░░░░███  ░███    ░███ ░███ ░███ ░░░  ░███ ░███ 
+  ███    ░███  ░███ ███░███ ░███ ░███      ░███ ░███ 
+ ░░█████████   ░░█████ ░░██████  █████     ████████  
+  ░░░░░░░░░     ░░░░░   ░░░░░░  ░░░░░     ░░░░░░░░   
+                                                     
 The Decentralized Object Storage Subnet
 ```
 
@@ -26,7 +26,7 @@ Storb is a decentralized object storage subnet built on the Bittensor network. I
 
 - **Incentivized Storage**: Storb leverages the power of the Bittensor. The subnet rewards miners for contributing reliable and responsive storage resources, with validators ensuring data integrity. Bittensor serves as *the* ideal incentive layer for this.
 
-For an overview of how the subnet works [see here](docs/overview.md)
+For an overview of how the subnet works, [see here](docs/overview.md).
 
 ## Installation
 
@@ -39,7 +39,7 @@ Follow these steps to set up a miner or validator node:
    cd storb
    ```
 
-w. **Set Up Virtual Environment**:
+2. **Set Up Virtual Environment**:
 
    Ensure you have [`uv` installed](https://docs.astral.sh/uv/getting-started/installation/). Once you do, run the following commands:
 
@@ -50,10 +50,10 @@ w. **Set Up Virtual Environment**:
    uv pip install -e .
    ```
 
-3. **Configure and run Node**:
+3. **Configure and run node**:
+
 - [**Miner**](docs/miner.md)
 - [**Validator**](docs/validator.md)
-
 
 ## Contributing
 
@@ -66,5 +66,3 @@ This project is licensed under the MIT License. See the [LICENSE](https://github
 ## Contact
 
 For questions or support, please open an issue in this repository or contact the maintainers on the Bittensor discord server.
-
----
