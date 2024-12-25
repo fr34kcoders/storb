@@ -1,13 +1,12 @@
 from enum import StrEnum
 
 # TODO: make this variable - dependant on file/piece size?
-QUERY_TIMEOUT = 2
+QUERY_TIMEOUT = 5
 NUM_UIDS_QUERY = 5  # default number of uids to query per store request
 QUERY_RATE = 10  # in blocks
 MAX_QUERY_BATCH_SIZE = 20  # default max query batch size
 
 MIN_PIECE_SIZE = 16 * 1024  # 16 KiB
-MAX_PIECE_SIZE = 16 * 1024 * 1024  # 16 MiB
 PIECE_LENGTH_SCALING = 0.5
 PIECE_LENGTH_OFFSET = 8.39  # these params should split a 1GiB file to 128 pieces
 

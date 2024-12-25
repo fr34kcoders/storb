@@ -1,15 +1,14 @@
 import hashlib
 import math
+import typing
 from collections.abc import Iterator
 from enum import IntEnum
-import typing
 
 import bittensor as bt
 from pydantic import BaseModel, Field
 from zfec.easyfec import Decoder, Encoder
 
 from storage_subnet.constants import (
-    MAX_PIECE_SIZE,
     MIN_PIECE_SIZE,
     PIECE_LENGTH_OFFSET,
     PIECE_LENGTH_SCALING,
@@ -61,9 +60,7 @@ def piece_hash(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
 
 
-def piece_length(
-    content_length: int, min_size: int = MIN_PIECE_SIZE, max_size: int = MAX_PIECE_SIZE
-) -> int:
+def piece_length(content_length: int, min_size: int = MIN_PIECE_SIZE) -> int:
     """Calculate an approximate piece size based on content length,
     clamped to a [min_size..max_size] range."""
     exponent = int(
@@ -72,8 +69,6 @@ def piece_length(
     length = 1 << exponent
     if length < min_size:
         return min_size
-    elif length > max_size:
-        return max_size
     return length
 
 
