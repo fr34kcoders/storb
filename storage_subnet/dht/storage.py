@@ -136,3 +136,20 @@ class SqliteStorageDHT(IStorage):
             case _:
                 raise ValueError(f"Invalid key namespace {key_namespace}")
 
+    async def get(self, key: str, default=None):
+        try:
+            return await self.__getitem__(key)
+        except Exception:
+            return default
+
+    def iter_older_than(self):
+        """
+        No-op
+        """
+        return []
+
+    def __iter__(self):
+        """
+        No-op
+        """
+        return []
