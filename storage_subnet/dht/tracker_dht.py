@@ -17,6 +17,7 @@ class TrackerDHTValue(BaseModel):
         ..., description="List of chunk hashes.", min_items=1
     )
     creation_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    signature: str
 
     @field_validator("filename")
     @classmethod

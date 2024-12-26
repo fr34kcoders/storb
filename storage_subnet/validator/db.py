@@ -16,19 +16,6 @@ METADATA = "metadata"
 INFOHASH_CHUNK_IDS = "infohash_chunk_ids"
 
 
-# Pydantic models
-class TrackerEntry(BaseModel):
-    infohash: str
-    validator_id: int
-    filename: str
-    length: int
-    chunk_length: int
-    chunk_count: int
-    chunk_hashes: list[str]
-    creation_timestamp: str
-    signature: str
-
-
 class ChunkEntry(BaseModel):
     chunk_hash: str
     infohash: str
@@ -50,6 +37,18 @@ class PieceEntry(BaseModel):
     chunk_idx: int
     piece_idx: int
     piece_type: PieceType
+    signature: str
+
+
+class TrackerEntry(BaseModel):
+    infohash: str
+    validator_id: int
+    filename: str
+    length: int
+    chunk_length: int
+    chunk_count: int
+    chunk_hashes: list[str]
+    creation_timestamp: str
     signature: str
 
 
@@ -135,9 +134,9 @@ async def update_stats(conn: aiosqlite.Connection, miner_uid: int, stats: dict):
     await conn.commit()
 
 
-async def set_tacker_entry(conn: aiosqlite.Connection, entry: TrackerEntry):
+async def set_tracker_entry(conn: aiosqlite.Connection, entry: TrackerEntry):
     query = """
-    INSERT INTO Tracker (infohash, validator_id, filename, length, chunk_length, chunk_count, chunk_hashes, creation_timestamp, signature)
+    INSERT INTO tracker (infohash, validator_id, filename, length, chunk_length, chunk_count, chunk_hashes, creation_timestamp, signature)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     await conn.execute(
@@ -159,7 +158,7 @@ async def set_tacker_entry(conn: aiosqlite.Connection, entry: TrackerEntry):
 
 async def get_tracker_entry(conn: aiosqlite.Connection, infohash: str):
     query = """
-    SELECT * FROM Tracker
+    SELECT * FROM tracker
     WHERE infohash = ?
     """
     async with conn.execute(query, (infohash,)) as cursor:
@@ -181,7 +180,7 @@ async def get_tracker_entry(conn: aiosqlite.Connection, infohash: str):
 
 async def delete_tracker_entry(conn: aiosqlite.Connection, infohash: str):
     query = """
-    DELETE FROM Tracker
+    DELETE FROM tracker
     WHERE infohash = ?
     """
     await conn.execute(query, (infohash,))
@@ -190,7 +189,7 @@ async def delete_tracker_entry(conn: aiosqlite.Connection, infohash: str):
 
 async def set_chunk_entry(conn: aiosqlite.Connection, entry: ChunkEntry):
     query = """
-    INSERT INTO Chunk (chunk_hash, infohash, validator_id, piece_hashes, chunk_idx, k, m, chunk_size, padlen, original_chunk_size, signature)
+    INSERT INTO chunk (chunk_hash, infohash, validator_id, piece_hashes, chunk_idx, k, m, chunk_size, padlen, original_chunk_size, signature)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
     await conn.execute(
@@ -214,7 +213,7 @@ async def set_chunk_entry(conn: aiosqlite.Connection, entry: ChunkEntry):
 
 async def get_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
     query = """
-    SELECT * FROM Chunk
+    SELECT * FROM chunk
     WHERE chunk_hash = ?
     """
     async with conn.execute(query, (chunk_hash,)) as cursor:
@@ -238,7 +237,7 @@ async def get_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
 
 async def delete_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
     query = """
-    DELETE FROM Chunk
+    DELETE FROM chunk
     WHERE chunk_hash = ?
     """
     await conn.execute(query, (chunk_hash,))
@@ -247,7 +246,7 @@ async def delete_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
 
 async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceEntry):
     query = """
-    INSERT INTO Piece (piece_hash, chunk_hash, miner_id, chunk_idx, piece_idx, piece_type, signature)
+    INSERT INTO piece (piece_hash, chunk_hash, miner_id, chunk_idx, piece_idx, piece_type, signature)
     VALUES (?, ?, ?, ?, ?, ?, ?)
     """
     await conn.execute(
@@ -267,7 +266,7 @@ async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceEntry):
 
 async def get_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
     query = """
-    SELECT * FROM Piece
+    SELECT * FROM piece
     WHERE piece_hash = ?
     """
     async with conn.execute(query, (piece_hash,)) as cursor:
@@ -287,7 +286,7 @@ async def get_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
 
 async def delete_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
     query = """
-    DELETE FROM Piece
+    DELETE FROM piece
     WHERE piece_hash = ?
     """
     await conn.execute(query, (piece_hash,))
