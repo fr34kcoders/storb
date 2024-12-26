@@ -36,6 +36,9 @@ dev = [
     "ruff>=0.8.2",
 ]
 
+[project.scripts]
+storb = "storage_subnet.storbcli:cli"
+
 [tool.ruff]
 exclude = [
     ".git",
@@ -62,6 +65,3 @@ packages = ["storage_subnet"]
 
 [tool.setuptools.package-dir]
 storage_subnet = "storage_subnet"
-
-[project.scripts]
-storb = "storage_subnet.storbcli:cli"
