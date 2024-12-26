@@ -20,5 +20,5 @@ CREATE TABLE logs (
 
 -- migrate:down
 
-DROP TABLE api_keys;
 DROP TABLE logs;
+DROP TABLE api_keys;
