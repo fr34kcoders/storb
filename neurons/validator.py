@@ -34,6 +34,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_401_UNAUTHORIZED,
+    HTTP_403_FORBIDDEN,
     HTTP_404_NOT_FOUND,
     HTTP_429_TOO_MANY_REQUESTS,
     HTTP_500_INTERNAL_SERVER_ERROR,
@@ -104,9 +105,7 @@ class Validator(BaseValidatorNeuron):
             max_size=5 * 1024 * 1024,  # 5 MiB
         )
 
-        setup_event_logger(
-            retention_size=5 * 1024 * 1024  # 5 MiB
-        )
+        setup_event_logger(retention_size=5 * 1024 * 1024)  # 5 MiB
 
         # start the axon server
         self.axon.start()
@@ -276,6 +275,7 @@ core_validator = None
 # API setup
 app = FastAPI(debug=False)
 
+
 def _get_api_key(request: Request) -> Any:
     auth_header = request.headers.get("Authorization")
     if not auth_header:
@@ -302,24 +302,33 @@ async def api_key_validator(request, call_next) -> Response:
         api_key_info = await db.get_api_key_info(conn, api_key)
 
     if api_key_info is None:
-        return JSONResponse(status_code=HTTP_401_UNAUTHORIZED, content={"detail": "Invalid API key"})
+        return JSONResponse(
+            status_code=HTTP_401_UNAUTHORIZED, content={"detail": "Invalid API key"}
+        )
 
-    credits_required = 1  # TODO: make this non-constant in the future???? (i.e. dependent on number of pools)????
+    # TODO: Make this variable, dependent on number of pools, size of file being requested, etc.
+    credits_required = 1
 
     # Now check credits
-    if api_key_info[db.BALANCE] is not None and api_key_info[db.BALANCE] <= credits_required:
+    if (
+        api_key_info[db.BALANCE] is not None
+        and api_key_info[db.BALANCE] <= credits_required
+    ):
         return JSONResponse(
-            status_code=HTTP_429_TOO_MANY_REQUESTS,
-            content={"detail": "Insufficient credits - sorry!"},
+            status_code=HTTP_403_FORBIDDEN,
+            content={
+                "detail": f"Insufficient credits. The credits required is {credits_required}, current balance is {api_key_info[db.BALANCE]}"
+            },
         )
 
     # Now check rate limiting
+    # TODO: more robust rate limit checks that do not rely on DB calls every time
     async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
         rate_limit_exceeded = await db.rate_limit_exceeded(conn, api_key_info)
         if rate_limit_exceeded:
             return JSONResponse(
                 status_code=HTTP_429_TOO_MANY_REQUESTS,
-                content={"detail": "Rate limit exceeded - sorry!"},
+                content={"detail": "Rate limit exceeded"},
             )
 
     response: Response = await call_next(request)
@@ -331,6 +340,7 @@ async def api_key_validator(request, call_next) -> Response:
             await db.log_request(conn, api_key_info, request.url.path, credits_required)
             await conn.commit()
     return response
+
 
 # logging middleware
 @app.middleware("http")
