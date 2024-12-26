@@ -12,8 +12,8 @@ DHTValue = Union[ChunkDHTValue, PieceDHTValue, TrackerDHTValue]
 
 
 class SqliteStorageDHT(IStorage):
-    async def __init__(self):
-        self.db_dir = db.DB_DIR
+    async def __init__(self, db_dir: str = db.DB_DIR):
+        self.db_dir = db_dir
         self.db_conn = await db.get_db_connection(self.db_dir)
 
     async def __setitem__(self, key: str, value: str):
@@ -135,3 +135,4 @@ class SqliteStorageDHT(IStorage):
                 await db.delete_tracker_entry(self.db_conn, key_id)
             case _:
                 raise ValueError(f"Invalid key namespace {key_namespace}")
+
