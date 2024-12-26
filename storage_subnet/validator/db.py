@@ -4,14 +4,53 @@ Provides functions for interacting with validator's database
 
 import json
 from contextlib import asynccontextmanager
-from typing import Optional
 
 import aiosqlite
+from pydantic import BaseModel
+
+from storage_subnet.utils.piece import PieceType
 
 DB_DIR = "validator_database.db"
 PIECE_ID_MINER_UIDS = "piece_id_miner_uids"
 METADATA = "metadata"
 INFOHASH_CHUNK_IDS = "infohash_chunk_ids"
+
+
+# Pydantic models
+class TrackerEntry(BaseModel):
+    infohash: str
+    validator_id: int
+    filename: str
+    length: int
+    chunk_length: int
+    chunk_count: int
+    chunk_hashes: list[str]
+    creation_timestamp: str
+    signature: str
+
+
+class ChunkEntry(BaseModel):
+    chunk_hash: str
+    infohash: str
+    validator_id: int
+    piece_hashes: list[str]
+    chunk_idx: int
+    k: int
+    m: int
+    chunk_size: int
+    padlen: int
+    original_chunk_size: int
+    signature: str
+
+
+class PieceEntry(BaseModel):
+    piece_hash: str
+    chunk_hash: str
+    miner_id: int
+    chunk_idx: int
+    piece_idx: int
+    piece_type: PieceType
+    signature: str
 
 
 @asynccontextmanager
@@ -96,69 +135,160 @@ async def update_stats(conn: aiosqlite.Connection, miner_uid: int, stats: dict):
     await conn.commit()
 
 
-async def store_infohash_chunk_ids(
-    conn: aiosqlite.Connection, infohash: str, chunk_ids: list[str]
-) -> None:
-    dict_chunk_ids = {"chunk_ids": chunk_ids}
-    query = f"INSERT INTO {INFOHASH_CHUNK_IDS} VALUES (?, ?)"
-
-    await conn.execute(
-        query,
-        (infohash, json.dumps(dict_chunk_ids)),
-    )
-    await conn.commit()
-
-
-async def store_metadata(
-    conn: aiosqlite.Connection,
-    infohash: str,
-    filename: str,
-    timestamp: str,
-    piece_length: int,
-    length: int,
-) -> None:
-    query = f"INSERT INTO {METADATA} VALUES (?, ?, ?, ?, ?)"
-
+async def set_tacker_entry(conn: aiosqlite.Connection, entry: TrackerEntry):
+    query = """
+    INSERT INTO Tracker (infohash, validator_id, filename, length, chunk_length, chunk_count, chunk_hashes, creation_timestamp, signature)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
     await conn.execute(
         query,
         (
-            infohash,
-            filename,
-            timestamp,
-            piece_length,
-            length,
+            entry.infohash,
+            entry.validator_id,
+            entry.filename,
+            entry.length,
+            entry.chunk_length,
+            entry.chunk_count,
+            json.dumps(entry.chunk_hashes),
+            entry.creation_timestamp,
+            entry.signature,
         ),
     )
-
     await conn.commit()
 
 
-async def get_metadata(
-    conn: aiosqlite.Connection,
-    infohash: str,
-) -> dict:
-    query = f"SELECT * FROM {METADATA} WHERE infohash = ?"
+async def get_tracker_entry(conn: aiosqlite.Connection, infohash: str):
+    query = """
+    SELECT * FROM Tracker
+    WHERE infohash = ?
+    """
+    async with conn.execute(query, (infohash,)) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            return TrackerEntry(
+                infohash=row[0],
+                validator_id=row[1],
+                filename=row[2],
+                length=row[3],
+                chunk_length=row[4],
+                chunk_count=row[5],
+                chunk_hashes=json.loads(row[6]),
+                creation_timestamp=row[7],
+                signature=row[8],
+            )
+        return None  # Entry not found
 
-    # Use parameterized query to safely include infohash
-    cur = await conn.execute(query, (infohash,))
-    row = await cur.fetchone()
 
-    if row is None:
-        return None
+async def delete_tracker_entry(conn: aiosqlite.Connection, infohash: str):
+    query = """
+    DELETE FROM Tracker
+    WHERE infohash = ?
+    """
+    await conn.execute(query, (infohash,))
+    await conn.commit()
 
-    return dict(row)
+
+async def set_chunk_entry(conn: aiosqlite.Connection, entry: ChunkEntry):
+    query = """
+    INSERT INTO Chunk (chunk_hash, infohash, validator_id, piece_hashes, chunk_idx, k, m, chunk_size, padlen, original_chunk_size, signature)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+    await conn.execute(
+        query,
+        (
+            entry.chunk_hash,
+            entry.infohash,
+            entry.validator_id,
+            json.dumps(entry.piece_hashes),
+            entry.chunk_idx,
+            entry.k,
+            entry.m,
+            entry.chunk_size,
+            entry.padlen,
+            entry.original_chunk_size,
+            entry.signature,
+        ),
+    )
+    await conn.commit()
 
 
-# TODO: get stuff
-async def get_chunks_from_infohash(
-    conn: aiosqlite.Connection, infohash: str
-) -> Optional[list[str]]:  # noqa: F821
-    query = f"SELECT chunk_ids FROM {INFOHASH_CHUNK_IDS} WHERE infohash = ?"
+async def get_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
+    query = """
+    SELECT * FROM Chunk
+    WHERE chunk_hash = ?
+    """
+    async with conn.execute(query, (chunk_hash,)) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            return ChunkEntry(
+                chunk_hash=row[0],
+                infohash=row[1],
+                validator_id=row[2],
+                piece_hashes=json.loads(row[3]),
+                chunk_idx=row[4],
+                k=row[5],
+                m=row[6],
+                chunk_size=row[7],
+                padlen=row[8],
+                original_chunk_size=row[9],
+                signature=row[10],
+            )
+        return None  # Entry not found
 
-    cur = await conn.execute(query, (infohash,))  # Use a tuple for parameters
-    row = await cur.fetchone()
 
-    if row is None:
-        return None
+async def delete_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
+    query = """
+    DELETE FROM Chunk
+    WHERE chunk_hash = ?
+    """
+    await conn.execute(query, (chunk_hash,))
+    await conn.commit()
 
-    return json.loads(row["chunk_ids"])  # Extract JSON from the result
+
+async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceEntry):
+    query = """
+    INSERT INTO Piece (piece_hash, chunk_hash, miner_id, chunk_idx, piece_idx, piece_type, signature)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """
+    await conn.execute(
+        query,
+        (
+            entry.piece_hash,
+            entry.chunk_hash,
+            entry.miner_id,
+            entry.chunk_idx,
+            entry.piece_idx,
+            entry.piece_type,
+            entry.signature,
+        ),
+    )
+    await conn.commit()
+
+
+async def get_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
+    query = """
+    SELECT * FROM Piece
+    WHERE piece_hash = ?
+    """
+    async with conn.execute(query, (piece_hash,)) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            return PieceEntry(
+                piece_hash=row[0],
+                chunk_hash=row[1],
+                miner_id=row[2],
+                chunk_idx=row[3],
+                piece_idx=row[4],
+                piece_type=row[5],
+                signature=row[6],
+            )
+        return None  # Entry not found
+
+
+async def delete_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
+    query = """
+    DELETE FROM Piece
+    WHERE piece_hash = ?
+    """
+    await conn.execute(query, (piece_hash,))
+    await conn.commit()

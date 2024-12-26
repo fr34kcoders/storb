@@ -3,9 +3,29 @@ import threading
 
 import bittensor as bt
 from kademlia.network import Server
+from kademlia.storage import IStorage
 
 from storage_subnet.dht.piece_dht import ChunkDHTValue, PieceDHTValue
 from storage_subnet.dht.tracker_dht import TrackerDHTValue
+import storage_subnet.validator.db as db
+
+
+class SqliteStorageDHT(IStorage):
+    async def __init__(self):
+        self.db_dir = db.DB_DIR
+        self.db_conn = await db.get_db_connection(self.db_dir)
+
+    async def __setitem__(self, key, value):
+        key_namespace, key_id = key.split(":")
+        match key_namespace:
+            case "tracker":
+                pass
+            case "chunk":
+                pass
+            case "piece":
+                pass
+            case _:
+                raise ValueError(f"Invalid key namespace: {key_namespace}")
 
 
 class DHT:
