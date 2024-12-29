@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from storage_subnet.utils.piece import PieceType
+from storb.util.piece import PieceType
 
 # infohash -> ChunkDHTValue -> PieceDHTValue
 

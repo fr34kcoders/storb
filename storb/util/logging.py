@@ -12,12 +12,14 @@ LOG_DIR = "logs"
 
 # Function to ensure the log directory exists
 def ensure_log_directory_exists(log_dir: str):
-    """
-    Ensure the log directory exists. Create it if it doesn't.
+    """Ensure the log directory exists. Create it if it doesn't.
 
-    Args:
-        log_dir (str): Path to the log directory.
+    Parameters
+    ----------
+    log_dir : str
+        Path to the log directory.
     """
+
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
@@ -25,18 +27,25 @@ def ensure_log_directory_exists(log_dir: str):
 def setup_rotating_logger(
     logger_name: str, log_level: int, max_size: int, log_dir: str = LOG_DIR
 ) -> logging.Logger:
-    """
-    Set up a logger with rotating file and stream handlers.
+    """Set up a logger with rotating file and stream handlers.
 
-    Args:
-        logger_name (str): Name of the logger.
-        log_level (int): Logging level.
-        max_size (int): Maximum size of each log file before rotation (in bytes).
-        log_dir (str): Directory for the log files.
+    Parameters
+    ----------
+    logger_name : str
+        Name of the logger.
+    log_level : int
+        Logging level.
+    max_size : int
+        Maximum size of each log file before rotation (in bytes).
+    log_dir : str
+        Directory for the log files.
 
-    Returns:
-        logging.Logger: Configured logger.
+    Returns
+    -------
+    logging.Logger
+        Configured logger.
     """
+
     ensure_log_directory_exists(log_dir)
 
     # Define log file
@@ -83,16 +92,21 @@ def setup_rotating_logger(
 
 
 def setup_event_logger(retention_size: int, logs_dir: str = LOG_DIR) -> logging.Logger:
-    """
-    Set up a logger for event-level logs with a custom log level.
+    """Set up a logger for event-level logs with a custom log level.
 
-    Args:
-        logs_dir (str): Directory path for log files.
-        retention_size (int): Maximum size of the event log file before rotation.
+    Parameters
+    ----------
+    logs_dir : str
+        Directory path for log files.
+    retention_size : int
+        Maximum size of the event log file before rotation.
 
-    Returns:
-        logging.Logger: Configured event logger.
+    Returns
+    -------
+    logging.Logger
+        Configured event logger.
     """
+
     ensure_log_directory_exists(logs_dir)
 
     # Register custom EVENT log level

@@ -1,25 +1,38 @@
 import hashlib
 import json
+from dataclasses import dataclass
+
+
+# TODO
+@dataclass
+class Infohash: ...
 
 
 def generate_infohash(
     filename: str, timestamp: str, piece_length: int, length: int, pieces: list[str]
 ) -> tuple[str, dict[str, str | int | list[str]]]:
-    """
-    Generate the infohash from metadata and piece hashes.
+    """Generate the infohash from metadata and piece hashes.
 
-    Args:
-        name (str): Name of the file.
-        timestamp (str): Timestamp of file creation/upload.
-        piece_length (int): Length of each piece in bytes.
-        length (int): Total length of the file in bytes.
-        pieces (List[str]): List of SHA-1 hashes of the pieces.
+    Parameters
+    ----------
+    name : str
+        Name of the file.
+    timestamp : str
+        Timestamp of file creation/upload.
+    piece_length : int
+        Length of each piece in bytes.
+    length : int
+        Total length of the file in bytes.
+    pieces : list[str]
+        List of SHA-1 hashes of the pieces.
 
-    Returns:
-        Tuple[str, Dict[str, str | int | List[str]]]:
-            - str: SHA-256 hash of the serialized metadata (infohash).
-            - Dict: The serialized infohash dictionary.
+    Returns
+    -------
+    Tuple[str, Dict[str, str | int | List[str]]]:
+        - str: SHA-256 hash of the serialized metadata (infohash).
+        - Dict: The serialized infohash dictionary.
     """
+
     # Create the infohash metadata dictionary
     infohash_data: dict[str, str | int | list[str]] = {
         "filename": filename,

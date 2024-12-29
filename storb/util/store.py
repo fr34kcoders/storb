@@ -5,16 +5,19 @@ Provides utilities for accessing and managing the object store
 from pathlib import Path
 
 import aiofiles
-import bittensor as bt
+from fiber.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class ObjectStore:
     def __init__(self, store_dir: str):
-        """
-        Initialise the object store.
+        """Initialise the object store.
 
-        Args:
-            store_dir (int): The (relative) directory of the object store.
+        Parameters
+        ----------
+        store_dir : int
+            The (relative) directory of the object store.
         """
 
         self.path = Path(store_dir)
@@ -27,14 +30,17 @@ class ObjectStore:
             Path(self.path / f"{i:02x}").mkdir()
 
     async def read(self, piece_hash: str) -> bytes:
-        """
-        Read piece data in bytes from the store.
+        """Read piece data in bytes from the store.
 
-        Args:
-            piece_hash (str): The piece hash to query the data by.
+        Parameters
+        ----------
+        piece_hash : str
+            The piece hash to query the data by.
 
-        Returns:
-            bytes: The piece data.
+        Returns
+        -------
+        bytes
+            The piece data.
         """
 
         path = self.path / piece_hash[0:2] / piece_hash[2:]
@@ -44,14 +50,17 @@ class ObjectStore:
             return contents
 
     async def write(self, piece_hash: str, data: bytes):
-        """
-        Write piece data in bytes to the store.
+        """Write piece data in bytes to the store.
 
-        Args:
-            piece_hash (str): Piece hash for the data.
-            data (bytes): The piece data in bytes.
+        Parameters
+        ----------
+        piece_hash : str
+            Piece hash for the data.
+        data : bytes
+            The piece data in bytes.
         """
-        bt.logging.debug(f"Writing piece {piece_hash} to store")
+
+        logger.debug(f"Writing piece {piece_hash} to store")
         folder = self.path / piece_hash[0:2]
         if not folder.exists():
             folder.mkdir()

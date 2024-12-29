@@ -4,15 +4,18 @@ import typing
 from collections.abc import Iterator
 from enum import IntEnum
 
-import bittensor as bt
+from fiber.logging_utils import get_logger
 from pydantic import BaseModel, Field
 from zfec.easyfec import Decoder, Encoder
 
-from storage_subnet.constants import (
+from storb.constants import (
+    MAX_PIECE_SIZE,
     MIN_PIECE_SIZE,
     PIECE_LENGTH_OFFSET,
     PIECE_LENGTH_SCALING,
 )
+
+logger = get_logger(__name__)
 
 
 class PieceType(IntEnum):
@@ -51,41 +54,68 @@ class EncodedPieces(BaseModel):
 def piece_hash(data: bytes) -> str:
     """Calculate the SHA-1 hash of a piece of data.
 
-    Args:
-        data (bytes): The data to hash.
+    Parameters
+    ----------
+    data : bytes
+        The data to hash.
 
-    Returns:
-        str: The SHA-1 hash of the data.
+    Returns
+    -------
+    str
+        The SHA-1 hash of the data.
     """
+
     return hashlib.sha1(data).hexdigest()
 
 
-def piece_length(content_length: int, min_size: int = MIN_PIECE_SIZE) -> int:
+def piece_length(
+    content_length: int, min_size: int = MIN_PIECE_SIZE, max_size: int = MAX_PIECE_SIZE
+) -> int:
     """Calculate an approximate piece size based on content length,
-    clamped to a [min_size..max_size] range."""
+    clamped to a [min_size, max_size] range.
+
+    Parameters
+    ----------
+    content_length : int
+        The length of the piece (in bytes)
+    min_size : int
+        The minimum allowed piece size
+    max_size : int
+        The maximum allowed piece size
+
+    Returns
+    -------
+    int
+        The piece length
+    """
+
     exponent = int(
         (math.log2(content_length) * PIECE_LENGTH_SCALING) + PIECE_LENGTH_OFFSET
     )
     length = 1 << exponent
     if length < min_size:
         return min_size
+    elif length > max_size:
+        return max_size
     return length
 
 
 def encode_chunk(chunk: bytes, chunk_idx: int) -> EncodedChunk:
-    """
-    Encodes a single chunk of data into FEC pieces.
+    """Encodes a single chunk of data into FEC pieces.
 
-    Arguments
+    Parameters
+    ----------
         chunk (bytes): The raw bytes of this single chunk.
         chunk_idx (int): The index of this chunk in the overall file or stream.
 
-    Returns:
+    Returns
+    -------
         EncodedChunk: An EncodedChunk object.
     """
+
     chunk_size = len(chunk)
     piece_size = piece_length(chunk_size)
-    bt.logging.debug(
+    logger.debug(
         f"[encode_chunk] chunk {chunk_idx}: {chunk_size} bytes, piece_size = {piece_size}"
     )
 
@@ -130,22 +160,26 @@ def encode_chunk(chunk: bytes, chunk_idx: int) -> EncodedChunk:
         original_chunk_length=chunk_size,
     )
 
-    bt.logging.debug(
+    logger.debug(
         f"[encode_chunk] chunk {chunk_idx}: k={k}, m={m}, encoded {len(encoded_chunk.pieces)} blocks"
     )
     return encoded_chunk
 
 
 def decode_chunk(encoded_chunk: EncodedChunk) -> bytes:
-    """
-    Decodes a single chunk from the piece dictionary created by encode_chunk.
+    """Decodes a single chunk from the piece dictionary created by encode_chunk.
 
-    Arguments:
-        encoded_chunk (EncodedChunk): An EncodedChunk object.
+    Parameters
+    ----------
+    encoded_chunk : EncodedChunk
+        An EncodedChunk object.
 
-    Returns:
-        bytes: The decoded chunk as bytes.
+    Returns
+    -------
+    bytes
+        The decoded chunk as bytes.
     """
+
     k = encoded_chunk.k
     m = encoded_chunk.m
     padlen = encoded_chunk.padlen
@@ -165,16 +199,21 @@ def decode_chunk(encoded_chunk: EncodedChunk) -> bytes:
 
 
 def reconstruct_data(pieces: list[Piece], chunks: list[EncodedChunk]) -> bytes:
-    """
-    Reconstructs the original data from chunks
+    """Reconstructs the original data from chunks
 
-    Arguments:
-        pieces (list[Piece]): List of pieces from the miners
-        chunks (list[EncodedChunk]): List of encoded chunks from the validators
+    Parameters
+    ----------
+    pieces : list[Piece]
+        List of pieces from the miners
+    chunks : list[EncodedChunk]
+        List of encoded chunks from the validators
 
-    Returns:
-        bytes: The original data in bytes
+    Returns
+    -------
+    bytes
+        The original data in bytes
     """
+
     reconstructed_chunks = []
 
     for chunk in chunks:
@@ -200,8 +239,7 @@ def reconstruct_data(pieces: list[Piece], chunks: list[EncodedChunk]) -> bytes:
 def reconstruct_data_stream(
     pieces: list[Piece], chunks: list[EncodedChunk]
 ) -> Iterator[bytes]:
-    """
-    Generator that yields the reconstructed data chunk by chunk.
+    """Generator that yields the reconstructed data chunk by chunk.
     Each yield returns the decoded bytes for a single chunk.
     """
 

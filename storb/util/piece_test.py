@@ -4,7 +4,7 @@ from random import randbytes, sample, shuffle
 
 from fastapi import UploadFile
 
-from storage_subnet.utils.piece import (
+from storb.util.piece import (
     EncodedChunk,
     Piece,
     encode_chunk,

@@ -1,11 +1,13 @@
 import asyncio
 import threading
 
-import bittensor as bt
+from fiber.logging_utils import get_logger
 from kademlia.network import Server
 
-from storage_subnet.dht.piece_dht import ChunkDHTValue, PieceDHTValue
-from storage_subnet.dht.tracker_dht import TrackerDHTValue
+from storb.dht.piece_dht import ChunkDHTValue, PieceDHTValue
+from storb.dht.tracker_dht import TrackerDHTValue
+
+logger = get_logger(__name__)
 
 
 class DHT:
@@ -23,31 +25,31 @@ class DHT:
         try:
             self.loop.run_until_complete(self.server.listen(self.port))
         except Exception as e:
-            bt.logging.error(f"Failed to start server on port {self.port}: {e}")
+            logger.error(f"Failed to start server on port {self.port}: {e}")
             raise RuntimeError(f"Server failed to start on port {self.port}") from e
 
     def _bootstrap_server(self):
         if self.bootstrap_node:
-            bt.logging.info(f"Bootstrapping DHT server to {self.bootstrap_node}")
+            logger.info(f"Bootstrapping DHT server to {self.bootstrap_node}")
             self.loop.run_until_complete(self.server.bootstrap([self.bootstrap_node]))
 
     def _run_server(self):
         """Run the DHT server in a separate thread."""
         self._setup_server()
         self._bootstrap_server()
-        bt.logging.info(f"DHT Server started and listening on port {self.port}")
+        logger.info(f"DHT Server started and listening on port {self.port}")
         self.is_running.set()
         try:
             self.loop.run_forever()
         except asyncio.CancelledError:
-            bt.logging.info("DHT server loop cancelled.")
+            logger.info("DHT server loop cancelled.")
         except Exception as e:
-            bt.logging.error(f"Unexpected error in DHT server loop: {e}")
+            logger.error(f"Unexpected error in DHT server loop: {e}")
         finally:
             # Ensure all background tasks are stopped before exiting the loop
             pending_tasks = asyncio.all_tasks(self.loop)
             if pending_tasks:
-                bt.logging.info("Stopping all pending tasks...")
+                logger.info("Stopping all pending tasks...")
                 for task in pending_tasks:
                     task.cancel()
                 asyncio.run_coroutine_threadsafe(
@@ -55,15 +57,25 @@ class DHT:
                 ).result()
 
             self.loop.close()
-            bt.logging.info("DHT server event loop closed.")
+            logger.info("DHT server event loop closed.")
             self.is_running.clear()
 
     async def start(
         self, bootstrap_node_ip: str = None, bootstrap_node_port: int = None
     ):
-        """Start the DHT server on a separate thread."""
+        """
+        Start the DHT server on a separate thread.
+
+        Parameters
+        ----------
+        bootstrap_node_ip : str
+            Node IP for bootstrapping the DHT server.
+        bootstrap_node_port : int
+            Node port for bootstrapping the DHT server.
+        """
+
         if self.thread and self.thread.is_alive():
-            bt.logging.info("DHT Server is already running.")
+            logger.info("DHT Server is already running.")
             return
 
         if bootstrap_node_ip and bootstrap_node_port:
@@ -82,36 +94,36 @@ class DHT:
 
         # Wait for the server to be ready
         if not self.is_running.wait(timeout=self.startup_timeout):
-            bt.logging.error("DHT Server failed to start within the timeout period.")
+            logger.error("DHT Server failed to start within the timeout period.")
             raise RuntimeError("DHT Server did not start.")
 
-        bt.logging.info("DHT Server thread started.")
+        logger.info("DHT Server thread started.")
 
     async def stop(self):
         """Stop the DHT server and its thread."""
         if self.loop.is_running():
-            bt.logging.info("Stopping DHT server...")
+            logger.info("Stopping DHT server...")
             self.loop.call_soon_threadsafe(self.loop.stop)
 
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=5)
             if self.thread.is_alive():
-                bt.logging.error("DHT server thread did not shut down cleanly.")
+                logger.error("DHT server thread did not shut down cleanly.")
             else:
-                bt.logging.info("DHT server thread stopped successfully.")
+                logger.info("DHT server thread stopped successfully.")
 
         await self.server.stop()
 
         # Ensure all pending tasks are completed before closing the loop
         pending_tasks = asyncio.all_tasks(self.loop)
         if pending_tasks:
-            bt.logging.info("Waiting for pending tasks to complete...")
+            logger.info("Waiting for pending tasks to complete...")
             for task in pending_tasks:
                 task.cancel()
             await asyncio.gather(*pending_tasks, return_exceptions=True)
 
         self.loop.close()
-        bt.logging.info("DHT Server stopped and event loop closed.")
+        logger.info("DHT Server stopped and event loop closed.")
 
     # Tracker DHT methods
     async def store_tracker_entry(self, infohash: str, value: TrackerDHTValue) -> None:
@@ -119,7 +131,7 @@ class DHT:
         Store a tracker entry in the DHT.
         tracker:infohash -> TrackerDHTValue
         """
-        bt.logging.info(f"Storing tracker entry for infohash: {infohash}")
+        logger.info(f"Storing tracker entry for infohash: {infohash}")
         ser_value = value.model_dump_json()
         try:
             if self.server.protocol.router is None:
@@ -131,7 +143,7 @@ class DHT:
             res = future.result(timeout=5)
             if not res:
                 raise RuntimeError(f"Failed to store tracker entry for {infohash}")
-            bt.logging.info(f"Successfully stored tracker entry for {infohash}")
+            logger.info(f"Successfully stored tracker entry for {infohash}")
         except Exception as e:
             raise RuntimeError(f"Failed to store tracker entry for {infohash}: {e}")
 
@@ -139,7 +151,7 @@ class DHT:
         """
         Retrieve a tracker entry from the DHT.
         """
-        bt.logging.info(f"Retrieving tracker entry for infohash: {infohash}")
+        logger.info(f"Retrieving tracker entry for infohash: {infohash}")
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
@@ -150,7 +162,7 @@ class DHT:
             if not ser_value:
                 raise RuntimeError(f"Failed to retrieve tracker entry for {infohash}")
             value = TrackerDHTValue.model_validate_json(ser_value)
-            bt.logging.info(f"Successfully retrieved tracker entry for {infohash}")
+            logger.info(f"Successfully retrieved tracker entry for {infohash}")
             return value
         except Exception as e:
             raise RuntimeError(f"Failed to retrieve tracker entry for {infohash}: {e}")
@@ -161,7 +173,7 @@ class DHT:
         Store a chunk entry in the DHT.
         chunk:chunk_id -> ChunkDHTValue
         """
-        bt.logging.info(f"Storing chunk entry for chunk_id: {chunk_id}")
+        logger.info(f"Storing chunk entry for chunk_id: {chunk_id}")
         ser_value = value.model_dump_json()
         try:
             if self.server.protocol.router is None:
@@ -173,7 +185,7 @@ class DHT:
             res = future.result(timeout=5)
             if not res:
                 raise RuntimeError(f"Failed to store chunk entry for {chunk_id}")
-            bt.logging.info(f"Successfully stored chunk entry for {chunk_id}")
+            logger.info(f"Successfully stored chunk entry for {chunk_id}")
         except Exception as e:
             raise RuntimeError(f"Failed to store chunk entry for {chunk_id}: {e}")
 
@@ -181,7 +193,7 @@ class DHT:
         """
         Retrieve a chunk entry from the DHT.
         """
-        bt.logging.info(f"Retrieving chunk entry for chunk_id: {chunk_id}")
+        logger.info(f"Retrieving chunk entry for chunk_id: {chunk_id}")
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
@@ -192,7 +204,7 @@ class DHT:
             if ser_value is None:
                 raise RuntimeError(f"Failed to retrieve chunk entry for {chunk_id}")
             value = ChunkDHTValue.model_validate_json(ser_value)
-            bt.logging.info(f"Successfully retrieved chunk entry for {chunk_id}")
+            logger.info(f"Successfully retrieved chunk entry for {chunk_id}")
             return value
         except Exception as e:
             raise RuntimeError(f"Failed to retrieve chunk entry for {chunk_id}: {e}")
@@ -203,7 +215,7 @@ class DHT:
         Store a piece entry in the DHT.
         piece:piece_id -> PieceDHTValue
         """
-        bt.logging.info(f"Storing piece entry for piece_id: {piece_id}")
+        logger.info(f"Storing piece entry for piece_id: {piece_id}")
         ser_value = value.model_dump_json()
         try:
             if self.server.protocol.router is None:
@@ -215,7 +227,7 @@ class DHT:
             res = future.result(timeout=5)
             if not res:
                 raise RuntimeError(f"Failed to store piece entry for {piece_id}")
-            bt.logging.info(f"Successfully stored piece entry for {piece_id}")
+            logger.info(f"Successfully stored piece entry for {piece_id}")
         except Exception as e:
             raise RuntimeError(f"Failed to store piece entry for {piece_id}: {e}")
 
@@ -224,7 +236,7 @@ class DHT:
         """
         Retrieve a piece entry from the DHT.
         """
-        bt.logging.info(f"Retrieving piece entry for piece_id: {piece_id}")
+        logger.info(f"Retrieving piece entry for piece_id: {piece_id}")
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
@@ -235,7 +247,7 @@ class DHT:
             if ser_value is None:
                 raise RuntimeError(f"Failed to retrieve piece entry for {piece_id}")
             value = PieceDHTValue.model_validate_json(ser_value)
-            bt.logging.info(f"Successfully retrieved piece entry for {piece_id}")
+            logger.info(f"Successfully retrieved piece entry for {piece_id}")
             return value
         except Exception as e:
             raise RuntimeError(f"Failed to retrieve piece entry for {piece_id}: {e}")

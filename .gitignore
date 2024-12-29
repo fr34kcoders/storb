@@ -2,10 +2,13 @@
 .ruff_cache
 .vscode
 
+# Fiber
+nodes.json
+
 # store
 object_store
 
-# db
+# Database
 validator_database.db
 
 # Byte-compiled / optimized / DLL files
