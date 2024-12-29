@@ -1,18 +1,33 @@
 import asyncio
+import json
+import os
 import threading
 
 import bittensor as bt
 from kademlia.network import Server
 
-from storage_subnet.constants import DHT_PORT
+from storage_subnet.constants import DHT_PORT, DHT_SAVE_FILE
 from storage_subnet.dht.chunk_dht import ChunkDHTValue
 from storage_subnet.dht.piece_dht import PieceDHTValue
+from storage_subnet.dht.storage import PersistentStorageDHT, build_store_key
 from storage_subnet.dht.tracker_dht import TrackerDHTValue
 
 
 class DHT:
-    def __init__(self, port: int = DHT_PORT, startup_timeout: int = 5):
-        self.server: Server = Server()
+    def __init__(self, port: int = DHT_PORT, startup_timeout: int = 2):
+        """Initialize the DHT server.
+
+        Parameters
+        ----------
+        port : int (optional)
+            Port number to run the DHT server on. Defaults to DHT_PORT.
+        startup_timeout : int (optional)
+            Timeout in seconds to wait for the DHT server to start. Defaults to 5 seconds.
+        """
+
+        self.server: Server = Server(
+            storage=PersistentStorageDHT(),
+        )
         self.port: int = port
         self.startup_timeout: int = startup_timeout
         self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
@@ -21,14 +36,36 @@ class DHT:
         self.is_running: threading.Event = threading.Event()
 
     def _setup_server(self):
+        """Run the DHT server in the event loop.
+
+        Raises
+        ------
+        RuntimeError
+            If the server fails to start.
+
+        Notes
+        -----
+        If there is a save file, the server will load the state from the save file.
+        If there is no save file, the server will start listening on the port.
+        """
+
         asyncio.set_event_loop(self.loop)
         try:
-            self.loop.run_until_complete(self.server.listen(self.port))
+            # Check if a save file exists start server with load_state() else start server with listen()
+            if os.path.exists(DHT_SAVE_FILE):
+                self.loop.run_until_complete(
+                    self.server.load_state(DHT_SAVE_FILE, self.port)
+                )
+                bt.logging.info(f"Starting server with DHT state from {DHT_SAVE_FILE}")
+            else:
+                self.loop.run_until_complete(self.server.listen(self.port))
+                self.server.save_state_regularly(DHT_SAVE_FILE, 10)
         except Exception as e:
             bt.logging.error(f"Failed to start server on port {self.port}: {e}")
             raise RuntimeError(f"Server failed to start on port {self.port}") from e
 
     def _bootstrap_server(self):
+        """Bootstrap the DHT server to the known node."""
         if self.bootstrap_node:
             bt.logging.info(f"Bootstrapping DHT server to {self.bootstrap_node}")
             self.loop.run_until_complete(self.server.bootstrap([self.bootstrap_node]))
@@ -63,7 +100,22 @@ class DHT:
     async def start(
         self, bootstrap_node_ip: str = None, bootstrap_node_port: int = None
     ):
-        """Start the DHT server on a separate thread."""
+        """Start the DHT server and its thread.
+
+        Parameters
+        ----------
+        bootstrap_node_ip : str (optional)
+            IP address of the bootstrap node to connect to.
+
+        bootstrap_node_port : int (optional)
+            Port number of the bootstrap node to connect to.
+
+        Raises
+        ------
+        ValueError
+            If the bootstrap_node_port is not a positive integer.
+        """
+
         if self.thread and self.thread.is_alive():
             bt.logging.info("DHT Server is already running.")
             return
@@ -117,17 +169,34 @@ class DHT:
 
     # Tracker DHT methods
     async def store_tracker_entry(self, infohash: str, value: TrackerDHTValue) -> None:
+        """Store a tracker entry in the DHT.
+
+        Parameters
+        ----------
+        infohash : str
+            Infohash of the torrent to store the tracker entry for.
+
+        value : TrackerDHTValue
+            TrackerDHTValue object to store in the DHT.
+
+        Raises
+        ------
+        RuntimeError
+            If the tracker entry fails to store.
+
+        Notes
+        -----
+        The key for the tracker entry is "tracker:infohash".
         """
-        Store a tracker entry in the DHT.
-        tracker:infohash -> TrackerDHTValue
-        """
+
         bt.logging.info(f"Storing tracker entry for infohash: {infohash}")
-        ser_value = value.model_dump_json()
+        value: bytes = value.model_dump_json().encode("utf-8")
+        key: bytes = build_store_key("tracker", infohash)
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(
-                self.server.set(f"tracker:{infohash}", ser_value),
+                self.server.set(key, value),
                 self.loop,
             )
             res = future.result(timeout=5)
@@ -138,109 +207,188 @@ class DHT:
             raise RuntimeError(f"Failed to store tracker entry for {infohash}: {e}")
 
     async def get_tracker_entry(self, infohash: str) -> TrackerDHTValue:
+        """Retrieve a tracker entry from the DHT.
+
+        Parameters
+        ----------
+        infohash : str
+            Infohash of the file to retrieve the tracker entry for.
+
+        Returns
+        -------
+        TrackerDHTValue
+            TrackerDHTValue object for the infohash.
+
+        Raises
+        ------
+        RuntimeError
+            If the tracker entry fails to retrieve.
         """
-        Retrieve a tracker entry from the DHT.
-        """
+
         bt.logging.info(f"Retrieving tracker entry for infohash: {infohash}")
+        key = build_store_key("tracker", infohash)
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
-            future = asyncio.run_coroutine_threadsafe(
-                self.server.get(f"tracker:{infohash}"), self.loop
-            )
-            ser_value = future.result(timeout=5)
-            if not ser_value:
-                raise RuntimeError(f"Failed to retrieve tracker entry for {infohash}")
-            value = TrackerDHTValue.model_validate_json(ser_value)
+            future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
+            value: bytes = future.result(timeout=5)
+            if not value:
+                return None
             bt.logging.info(f"Successfully retrieved tracker entry for {infohash}")
+            value.decode("utf-8")
+            value = json.loads(value)
+            value = TrackerDHTValue(**value)
             return value
         except Exception as e:
             raise RuntimeError(f"Failed to retrieve tracker entry for {infohash}: {e}")
 
     # Chunk DHT methods
-    async def store_chunk_entry(self, chunk_id: str, value: ChunkDHTValue) -> None:
+    async def store_chunk_entry(self, chunk_hash: str, value: ChunkDHTValue) -> None:
+        """Store a chunk entry in the DHT.
+
+        Parameters
+        ----------
+        chunk_hash : str
+            Chunk hash of the chunk to store the chunk entry for.
+
+        value : ChunkDHTValue
+            ChunkDHTValue object to store in the DHT.
+
+        Raises
+        ------
+        RuntimeError
+            If the chunk entry fails to store.
+
+        Notes
+        -----
+        The key for the chunk entry is "chunk:chunk_hash".
         """
-        Store a chunk entry in the DHT.
-        chunk:chunk_id -> ChunkDHTValue
-        """
-        bt.logging.info(f"Storing chunk entry for chunk_id: {chunk_id}")
-        ser_value = value.model_dump_json()
+
+        bt.logging.info(f"Storing chunk entry for chunk_hash: {chunk_hash}")
+        value: bytes = value.model_dump_json().encode("utf-8")
+        key: bytes = build_store_key("chunk", chunk_hash)
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(
-                self.server.set(f"chunk:{chunk_id}", ser_value),
+                self.server.set(key, value),
                 self.loop,
             )
             res = future.result(timeout=5)
             if not res:
-                raise RuntimeError(f"Failed to store chunk entry for {chunk_id}")
-            bt.logging.info(f"Successfully stored chunk entry for {chunk_id}")
+                raise RuntimeError(f"Failed to store chunk entry for {chunk_hash}")
+            bt.logging.info(f"Successfully stored chunk entry for {chunk_hash}")
         except Exception as e:
-            raise RuntimeError(f"Failed to store chunk entry for {chunk_id}: {e}")
+            raise RuntimeError(f"Failed to store chunk entry for {chunk_hash}: {e}")
 
-    async def get_chunk_entry(self, chunk_id: str) -> ChunkDHTValue:
+    async def get_chunk_entry(self, chunk_hash: str) -> ChunkDHTValue:
+        """Retrieve a chunk entry from the DHT.
+
+        Parameters
+        ----------
+        chunk_hash : str
+            Chunk hash of the chunk to retrieve the chunk entry for.
+
+        Returns
+        -------
+        ChunkDHTValue
+            ChunkDHTValue object for the chunk_hash.
+
+        Raises
+        ------
+        RuntimeError
+            If the chunk entry fails to retrieve.
         """
-        Retrieve a chunk entry from the DHT.
-        """
-        bt.logging.info(f"Retrieving chunk entry for chunk_id: {chunk_id}")
+        bt.logging.info(f"Retrieving chunk entry for chunk hash: {chunk_hash}")
+        key = build_store_key("chunk", chunk_hash)
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
-            future = asyncio.run_coroutine_threadsafe(
-                self.server.get(f"chunk:{chunk_id}"), self.loop
-            )
-            ser_value = future.result(timeout=5)
-            if ser_value is None:
-                raise RuntimeError(f"Failed to retrieve chunk entry for {chunk_id}")
-            value = ChunkDHTValue.model_validate_json(ser_value)
-            bt.logging.info(f"Successfully retrieved chunk entry for {chunk_id}")
+            future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
+            value: bytes = future.result(timeout=5)
+            if not value:
+                return None
+            bt.logging.info(f"Successfully retrieved chunk entry for {chunk_hash}")
+            value.decode("utf-8")
+            value = json.loads(value)
+            value = ChunkDHTValue(**value)
             return value
         except Exception as e:
-            raise RuntimeError(f"Failed to retrieve chunk entry for {chunk_id}: {e}")
+            raise RuntimeError(f"Failed to retrieve chunk entry for {chunk_hash}: {e}")
 
     # Piece DHT methods
-    async def store_piece_entry(self, piece_id: str, value: PieceDHTValue) -> None:
+    async def store_piece_entry(self, piece_hash: str, value: PieceDHTValue) -> None:
+        """Store a piece entry in the DHT.
+
+        Parameters
+        ----------
+        piece_hash : str
+            Piece hash of the piece to store the piece entry for.
+
+        value : PieceDHTValue
+            PieceDHTValue object to store in the DHT.
+
+        Raises
+        ------
+        RuntimeError
+            If the piece entry fails to store.
+
+        Notes
+        -----
+        The key for the piece entry is "piece:piece_hash".
         """
-        Store a piece entry in the DHT.
-        piece:piece_id -> PieceDHTValue
-        """
-        bt.logging.info(f"Storing piece entry for piece_id: {piece_id}")
-        ser_value = value.model_dump_json()
+        bt.logging.info(f"Storing piece entry for piece_hash: {piece_hash}")
+        value: bytes = value.model_dump_json().encode("utf-8")
+        key: bytes = build_store_key("piece", piece_hash)
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(
-                self.server.set(f"piece:{piece_id}", ser_value),
+                self.server.set(key, value),
                 self.loop,
             )
             res = future.result(timeout=5)
             if not res:
-                raise RuntimeError(f"Failed to store piece entry for {piece_id}")
-            bt.logging.info(f"Successfully stored piece entry for {piece_id}")
+                raise RuntimeError(f"Failed to store piece entry for {piece_hash}")
+            bt.logging.info(f"Successfully stored piece entry for {piece_hash}")
         except Exception as e:
-            raise RuntimeError(f"Failed to store piece entry for {piece_id}: {e}")
+            raise RuntimeError(f"Failed to store piece entry for {piece_hash}: {e}")
 
     # Piece DHT methods
-    async def get_piece_entry(self, piece_id: str) -> PieceDHTValue:
+    async def get_piece_entry(self, piece_hash: str) -> PieceDHTValue:
+        """Retrieve a piece entry from the DHT.
+
+        Parameters
+        ----------
+        piece_hash : str
+            Piece hash of the piece to retrieve the piece entry for.
+
+        Returns
+        -------
+        PieceDHTValue
+            PieceDHTValue object for the piece_hash.
+
+        Raises
+        ------
+        RuntimeError
+            If the piece entry fails to retrieve.
         """
-        Retrieve a piece entry from the DHT.
-        """
-        bt.logging.info(f"Retrieving piece entry for piece_id: {piece_id}")
+        bt.logging.info(f"Retrieving piece entry for piece hash: {piece_hash}")
+        key = build_store_key("piece", piece_hash)
         try:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
-            future = asyncio.run_coroutine_threadsafe(
-                self.server.get(f"piece:{piece_id}"), self.loop
-            )
-            ser_value = future.result(timeout=5)
-            if ser_value is None:
-                raise RuntimeError(f"Failed to retrieve piece entry for {piece_id}")
-            value = PieceDHTValue.model_validate_json(ser_value)
-            bt.logging.info(f"Successfully retrieved piece entry for {piece_id}")
+            future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
+            value: bytes = future.result(timeout=5)
+            if not value:
+                return None
+            bt.logging.info(f"Successfully retrieved piece entry for {piece_hash}")
+            value.decode("utf-8")
+            value = json.loads(value)
+            value = PieceDHTValue(**value)
             return value
         except Exception as e:
-            raise RuntimeError(f"Failed to retrieve piece entry for {piece_id}: {e}")
+            raise RuntimeError(f"Failed to retrieve piece entry for {piece_hash}: {e}")
 
     def __enter__(self):
         asyncio.run(self.start())

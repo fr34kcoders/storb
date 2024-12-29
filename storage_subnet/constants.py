@@ -22,6 +22,7 @@ STORE_DIR = "object_store"
 
 # default validator database dir
 DB_DIR = "validator_database.db"
+DHT_SAVE_FILE = "dht_save_file.bin"
 
 
 class LogColor(StrEnum):

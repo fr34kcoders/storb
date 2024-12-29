@@ -2,7 +2,7 @@ from pydantic import BaseModel
 
 
 class ChunkDHTValue(BaseModel):
-    infohash: str
+    chunk_hash: str
     validator_id: int
     piece_hashes: list[str]
     chunk_idx: int

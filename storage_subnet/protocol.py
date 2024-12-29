@@ -21,7 +21,8 @@ import typing
 import bittensor as bt
 from pydantic import BaseModel, Field
 
-from storage_subnet.dht.piece_dht import ChunkDHTValue, PieceDHTValue
+from storage_subnet.dht.chunk_dht import ChunkDHTValue
+from storage_subnet.dht.piece_dht import PieceDHTValue
 from storage_subnet.utils.piece import ProcessedPieceInfo
 
 

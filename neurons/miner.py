@@ -18,6 +18,8 @@
 
 import asyncio
 import base64
+import binascii
+import json
 import logging as pylog
 import time
 import typing
@@ -115,15 +117,27 @@ class Miner(BaseMinerNeuron):
         bt.logging.debug(
             f"ptype: {synapse.piece_type} | piece preview: {decoded_piece[:10]} | hash: {piece_id}"
         )
+        data = {
+            "miner_id": self.uid,
+            "chunk_idx": synapse.chunk_idx,
+            "piece_idx": synapse.piece_idx,
+            "piece_type": synapse.piece_type,
+        }
+        # sign piece values
+        keypair = self.wallet.hotkey
+        signature = keypair.sign(json.dumps(data).encode("utf-8"))
+        encoded_singature = binascii.hexlify(signature).decode("utf-8")
 
         await self.object_store.write(piece_id, decoded_piece)
         await self.dht.store_piece_entry(
             piece_id,
             PieceDHTValue(
+                piece_hash=piece_id,
                 miner_id=self.uid,
                 chunk_idx=synapse.chunk_idx,
                 piece_idx=synapse.piece_idx,
                 piece_type=synapse.piece_type,
+                signature=encoded_singature,
             ),
         )
         self.piece_count += 1

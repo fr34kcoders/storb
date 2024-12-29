@@ -18,7 +18,6 @@ dependencies = [
     "bittensor==8.4.5",
     "colorlog>=6.9.0",
     "fastapi>=0.110.3",
-    "kademlia>=2.2.2",
     "numpy==2.0.2",
     "pydantic>=2.10.3",
     "python-multipart>=0.0.19",
@@ -26,6 +25,7 @@ dependencies = [
     "starlette==0.37.2",
     "uvicorn>=0.32.1",
     "zfec>=1.6.0.0",
+    "storb-kademlia",
 ]
 
 [dependency-groups]
@@ -62,3 +62,6 @@ packages = ["storage_subnet"]
 
 [tool.setuptools.package-dir]
 storage_subnet = "storage_subnet"
+
+[tool.uv.sources]
+storb-kademlia = { git = "https://github.com/fr34kcoders/storb-kademlia.git" }

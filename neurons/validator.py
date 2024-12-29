@@ -19,8 +19,10 @@
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import logging.config
+from binascii import unhexlify
 from datetime import UTC, datetime
 
 import aiosqlite
@@ -34,6 +36,7 @@ from starlette.status import (
     HTTP_404_NOT_FOUND,
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
+from substrateinterface import Keypair
 
 import storage_subnet.validator.db as db
 
@@ -48,7 +51,8 @@ from storage_subnet.constants import (
     LogColor,
 )
 from storage_subnet.dht.base_dht import DHT
-from storage_subnet.dht.piece_dht import ChunkDHTValue, PieceDHTValue
+from storage_subnet.dht.chunk_dht import ChunkDHTValue
+from storage_subnet.dht.piece_dht import PieceDHTValue
 from storage_subnet.dht.tracker_dht import TrackerDHTValue
 from storage_subnet.protocol import (
     GetMiners,
@@ -108,7 +112,50 @@ class Validator(BaseValidatorNeuron):
         self.axon.start()
 
     async def get_metadata(self, synapse: MetadataSynapse) -> MetadataResponse:
-        return obtain_metadata(synapse.infohash)
+        return obtain_metadata_dht(synapse.infohash)
+
+    async def sign_message(self, message: str) -> str:
+        """Sign a message with the hotkey.
+
+        Parameters
+        ----------
+        message : str
+            The message to sign.
+
+        Returns
+        -------
+        signature : str
+            The signature of the message.
+        """
+
+        keypair = self.wallet.hotkey
+        return keypair.sign(message)
+
+    def verify_message(self, message: str, signature: str, signer: int) -> bool:
+        """Verify the signature of a message.
+
+        Parameters
+        ----------
+        message : str
+            The message to verify.
+        signature : str
+            The signature to verify.
+        signer : int
+           signer uid
+
+        Returns
+        --------
+        bool
+            True if the signature is valid, False otherwise.
+        """
+
+        assert self.metagraph is not None
+        assert signer < len(self.metagraph.hotkeys)
+
+        signer_hotkey = self.metagraph.hotkeys[signer]
+        keypair = Keypair(ss58_address=signer_hotkey, ss58_format=42)
+        bt.logging.debug(f"Verifying message: {message}")
+        return keypair.verify(message, signature)
 
     async def get_miners_for_file(self, synapse: GetMiners) -> GetMiners:
         """
@@ -125,17 +172,18 @@ class Validator(BaseValidatorNeuron):
             - 404 if no pieces are found for the given infohash.
             - 500 if any error occurs while retrieving miner information from the DHT.
         """
-        # Get the pieces from local tracker db
         infohash = synapse.infohash
 
-        chunk_ids = []
+        tracker_data = await self.dht.get_tracker_entry(infohash)
+        if tracker_data is None:
+            raise HTTPException(
+                status_code=HTTP_404_NOT_FOUND,
+                detail="No chunks found for the given infohash",
+            )
+
+        chunk_ids = tracker_data.chunk_hashes
         chunks_metadatas = []
         multi_piece_meta = []
-
-        async with db.get_db_connection(db_dir=self.config.db_dir) as conn:
-            # TODO: erm we shouldn't need to access the array of chunk ids like this?
-            # something might be wrong with get_chunks_from_infohash()
-            chunk_ids = (await db.get_chunks_from_infohash(conn, infohash))["chunk_ids"]
 
         if chunk_ids is None:
             raise HTTPException(
@@ -149,9 +197,32 @@ class Validator(BaseValidatorNeuron):
             chunks_metadatas.append(chunks_metadata)
             piece_ids = chunks_metadata.piece_hashes
             pieces_metadata: list[PieceDHTValue] = []
+            piece = None
             for piece_id in piece_ids:
                 try:
                     piece = await self.dht.get_piece_entry(piece_id)
+                    try:
+                        signature = piece.signature
+                        signature = unhexlify(signature.encode())
+                        # create message object excluding the signature
+                        message = {
+                            "miner_id": piece.miner_id,
+                            "chunk_idx": piece.chunk_idx,
+                            "piece_idx": piece.piece_idx,
+                            "piece_type": piece.piece_type,
+                        }
+                        # verify the signature
+                        if not core_validator.verify_message(
+                            message, signature, piece.miner_id
+                        ):
+                            raise HTTPException(
+                                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="Signature verification failed!",
+                            )
+                    except Exception as e:
+                        bt.logging.error(e)
+                        piece = None
+
                     pieces_metadata.append(piece)
                 except Exception as e:
                     bt.logging.error(
@@ -302,37 +373,41 @@ async def vali() -> str:
 
 
 @app.get("/metadata/", response_model=MetadataResponse)
-async def obtain_metadata(infohash: str) -> MetadataResponse:
-    try:
-        async with db.get_db_connection(db_dir=core_validator.config.db_dir) as conn:
-            metadata = await db.get_metadata(conn, infohash)
-
-            if metadata is None:
-                # Raise a 404 error if no metadata is found for the given infohash
-                raise HTTPException(status_code=404, detail="Metadata not found")
-
-            return MetadataResponse(**metadata)
-
-    except aiosqlite.OperationalError as e:
-        # Handle database-related errors
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
-
-    except Exception as e:
-        # Catch any other unexpected errors
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
-
-
-@app.get("/metadata/dht/", response_model=MetadataResponse)
 async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataResponse:
     bt.logging.info(f"Retrieving metadata for infohash: {infohash}")
     try:
-        metadata = await core_validator.dht.get_tracker_entry(infohash)
+        tracker_value = await core_validator.dht.get_tracker_entry(infohash)
+        try:
+            signature = tracker_value.signature
+            signature = unhexlify(signature.encode())
+            # create message object excluding the signature
+            message = {
+                "validator_id": tracker_value.validator_id,
+                "filename": tracker_value.filename,
+                "length": tracker_value.length,
+                "chunk_length": tracker_value.chunk_length,
+                "chunk_count": tracker_value.chunk_count,
+                "chunk_hashes": tracker_value.chunk_hashes,
+                "creation_timestamp": tracker_value.creation_timestamp,
+            }
+            # verify the signature
+            if not core_validator.verify_message(
+                message, signature, tracker_value.validator_id
+            ):
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Signature verification failed!",
+                )
+        except Exception as e:
+            bt.logging.error(e)
+            tracker_value = None
+
         return MetadataResponse(
             infohash=infohash,
-            filename=metadata.filename,
-            timestamp=metadata.creation_timestamp,
-            piece_length=metadata.piece_length,
-            length=metadata.length,
+            filename=tracker_value.filename,
+            timestamp=tracker_value.creation_timestamp,
+            chunk_length=tracker_value.chunk_length,
+            length=tracker_value.length,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
@@ -445,48 +520,6 @@ async def process_pieces(
     return piece_hashes, processed_pieces
 
 
-async def store_in_dht(
-    validator_id: int,
-    infohash: str,
-    filename: str,
-    filesize: int,
-    piece_size: int,
-    piece_count: int,
-) -> None:
-    """
-    Asynchronously stores tracker entry information in a Distributed Hash Table (DHT).
-
-    Args:
-        dht (DHT): The DHT instance where the tracker entry will be stored.
-        validator_id (int): The ID of the validator.
-        infohash (str): The infohash of the file.
-        filename (str): The name of the file.
-        filesize (int): The size of the file in bytes.
-        piece_size (int): The size of each piece in bytes.
-        piece_count (int): The number of pieces the file is divided into.
-
-    Raises:
-        HTTPException: If storing the tracker entry in the DHT fails.
-    """
-    try:
-        await core_validator.dht.store_tracker_entry(
-            infohash,
-            TrackerDHTValue(
-                validator_id=validator_id,
-                filename=filename,
-                length=filesize,
-                piece_length=piece_size,
-                piece_count=piece_count,
-                parity_count=2,
-            ),
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to store tracker entry in DHT: {e}",
-        )
-
-
 @app.post("/store/", response_model=StoreResponse)
 async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
     validator_id = core_validator.uid
@@ -510,10 +543,6 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         # file metadata
         filename = file.filename
         filesize = file.size
-
-        # Use constants for data/parity pieces
-        data_pieces = EC_DATA_SIZE
-        parity_pieces = EC_PARITY_SIZE
 
         # chunk size to read in each iteration
         chunk_size = piece_length(filesize)
@@ -546,21 +575,43 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
 
             piece_hashes += sent_piece_hashes
 
-            dht_chunk = ChunkDHTValue(
-                piece_hashes=sent_piece_hashes,
-                chunk_idx=chunk_info.chunk_idx,
-                k=chunk_info.k,
-                m=chunk_info.m,
-                chunk_size=chunk_info.chunk_size,
-                padlen=chunk_info.padlen,
-                original_chunk_length=chunk_info.original_chunk_length,
+            data = {
+                "validator_id": validator_id,
+                "piece_hashes": sent_piece_hashes,
+                "chunk_idx": chunk_idx,
+                "k": chunk_info.k,
+                "m": chunk_info.m,
+                "chunk_size": chunk_info.chunk_size,
+                "padlen": chunk_info.padlen,
+                "original_chunk_size": chunk_info.original_chunk_size,
+            }
+            chunk_hash = hashlib.sha1(json.dumps(data).encode("utf-8")).hexdigest()
+            data["chunk_hash"] = chunk_hash
+            try:
+                signature = await core_validator.sign_message(
+                    json.dumps(data).encode("utf-8")
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to sign chunk: {e}",
+                )
+
+            await core_validator.dht.store_chunk_entry(
+                chunk_hash,
+                ChunkDHTValue(
+                    chunk_hash=chunk_hash,
+                    validator_id=validator_id,
+                    piece_hashes=sent_piece_hashes,
+                    chunk_idx=chunk_info.chunk_idx,
+                    k=chunk_info.k,
+                    m=chunk_info.m,
+                    chunk_size=chunk_info.chunk_size,
+                    padlen=chunk_info.padlen,
+                    original_chunk_size=chunk_info.original_chunk_size,
+                    signature=signature.hex(),
+                ),
             )
-
-            chunk_hash = hashlib.sha1(
-                dht_chunk.model_dump_json().encode("utf-8")
-            ).hexdigest()
-
-            await core_validator.dht.store_chunk_entry(chunk_hash, dht_chunk)
             chunk_hashes.append(chunk_hash)
 
             # TODO: score responses - consider responses that return the piece id to be successful?
@@ -572,30 +623,31 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         # Put piece hashes in a set
         piece_hash_set = set(piece_hashes)
         bt.logging.debug(f"Generated pieces: {len(piece_hash_set)}")
-        # Store infohash and metadata in the database
+        data = {
+            "validator_id": validator_id,
+            "filename": filename,
+            "length": filesize,
+            "chunk_length": chunk_size,
+            "chunk_count": len(chunk_hashes),
+            "chunk_hashes": chunk_hashes,
+            "creation_timestamp": timestamp,
+        }
+
         try:
-            async with db.get_db_connection(
-                db_dir=core_validator.config.db_dir
-            ) as conn:
-                await db.store_infohash_chunk_ids(conn, infohash, chunk_hashes)
-                await db.store_metadata(
-                    conn, infohash, filename, timestamp, piece_size, filesize
-                )
-        except aiosqlite.OperationalError as e:
-            raise HTTPException(
-                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error: {e}",
+            signature = await core_validator.sign_message(
+                json.dumps(data).encode("utf-8")
             )
         except Exception as e:
             raise HTTPException(
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Unexpected database error: {e}",
+                detail=f"Failed to sign metadata: {e}",
             )
 
         # Store data object metadata in the DHT
         await core_validator.dht.store_tracker_entry(
             infohash,
             TrackerDHTValue(
+                infohash=infohash,
                 validator_id=validator_id,
                 filename=filename,
                 length=filesize,
@@ -603,6 +655,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                 chunk_count=len(chunk_hashes),
                 chunk_hashes=chunk_hashes,
                 creation_timestamp=timestamp,
+                signature=signature.hex(),
             ),
         )
 
@@ -627,8 +680,40 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
 @app.get("/retrieve/")
 async def retrieve_file(infohash: str):
     # get validator id from tracker dht given infohash
-    tracker_dht = await core_validator.dht.get_tracker_entry(infohash)
-    validator_to_ask = tracker_dht.validator_id
+
+    try:
+        tracker_value = await core_validator.dht.get_tracker_entry(infohash)
+
+        if tracker_value is None:
+            raise HTTPException(
+                status_code=HTTP_404_NOT_FOUND,
+                detail="Tracker entry not found.",
+            )
+        signature = tracker_value.signature
+        signature = unhexlify(signature.encode())
+        # create message object excluding the signature
+        message = {
+            "validator_id": tracker_value.validator_id,
+            "filename": tracker_value.filename,
+            "length": tracker_value.length,
+            "chunk_length": tracker_value.chunk_length,
+            "chunk_count": tracker_value.chunk_count,
+            "chunk_hashes": tracker_value.chunk_hashes,
+            "creation_timestamp": tracker_value.creation_timestamp,
+        }
+        # verify the signature
+        if not core_validator.verify_message(
+            message, signature, tracker_value.validator_id
+        ):
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Signature verification failed!",
+            )
+    except Exception as e:
+        bt.logging.error(e)
+        tracker_value = None
+
+    validator_to_ask = tracker_value.validator_id
 
     # get the uids of the miners(s) that stores each respective piece by asking the validator
     synapse = GetMiners(infohash=infohash)
@@ -658,7 +743,7 @@ async def retrieve_file(infohash: str):
             m=chunks_metadata.m,
             chunk_size=chunks_metadata.chunk_size,
             padlen=chunks_metadata.padlen,
-            original_chunk_length=chunks_metadata.original_chunk_length,
+            original_chunk_size=chunks_metadata.original_chunk_size,
         )
         chunks.append(chunk)
 
@@ -708,6 +793,28 @@ async def retrieve_file(infohash: str):
             # pieces_metadata in the response from the validator
             # cba rn but should probs get around to addressing this later
             piece_meta = await core_validator.dht.get_piece_entry(piece_id)
+            try:
+                signature = piece_meta.signature
+                signature = unhexlify(signature.encode())
+                # create message object excluding the signature
+                message = {
+                    "miner_id": piece_meta.miner_id,
+                    "chunk_idx": piece_meta.chunk_idx,
+                    "piece_idx": piece_meta.piece_idx,
+                    "piece_type": piece_meta.piece_type,
+                }
+                # verify the signature
+                if not core_validator.verify_message(
+                    message, signature, piece_meta.miner_id
+                ):
+                    raise HTTPException(
+                        status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Signature verification failed!",
+                    )
+            except Exception as e:
+                bt.logging.error(e)
+                piece_meta = None
+
         except Exception as e:
             bt.logging.error(e)
             piece_meta = None
@@ -730,7 +837,7 @@ async def retrieve_file(infohash: str):
         pieces.append(piece)
         response_piece_ids.append(piece_id)
 
-    bt.logging.debug(f"tracker_dht: {tracker_dht}")
+    bt.logging.debug(f"tracker_value: {tracker_value}")
 
     # update miner(s) stats in validator db
     async with db.get_db_connection(core_validator.config.db_dir) as conn:
@@ -760,7 +867,7 @@ async def retrieve_file(infohash: str):
     def file_generator():
         yield from reconstruct_data_stream(pieces, chunks)
 
-    headers = {"Content-Disposition": f"attachment; filename={tracker_dht.filename}"}
+    headers = {"Content-Disposition": f"attachment; filename={tracker_value.filename}"}
     return StreamingResponse(
         file_generator(),
         media_type="application/octet-stream",

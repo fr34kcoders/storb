@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class TrackerDHTValue(BaseModel):
+    infohash: str
     validator_id: int
     filename: str
     length: int = Field(..., gt=0, description="File length must be greater than 0.")
