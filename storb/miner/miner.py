@@ -5,7 +5,9 @@ import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI
-from fiber.chain import chain_utils
+from fiber.encrypted.miner.endpoints.handshake import (
+    factory_router as get_subnet_router,
+)
 from fiber.logging_utils import get_logger
 from fiber.miner.dependencies import blacklist_low_stake, verify_request
 from fiber.miner.server import factory_app
@@ -29,10 +31,6 @@ class Miner(Neuron):
 
         self.config = MinerConfig()
 
-        self.keypair = chain_utils.load_hotkey_keypair(
-            self.wallet_name, self.hotkey_name
-        )
-
         self.check_registration()
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
 
@@ -52,9 +50,7 @@ class Miner(Neuron):
 
         asyncio.create_task(self.sync_loop())
 
-        config = uvicorn.Config(
-            self.app, host="0.0.0.0", port=self.config.T.miner_api_port
-        )
+        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.config.T.api_port)
         self.server = uvicorn.Server(config)
 
         try:
@@ -95,6 +91,8 @@ class Miner(Neuron):
             response_model=protocol.Retrieve,
             dependencies=[Depends(blacklist_low_stake), Depends(verify_request)],
         )
+
+        self.app.include_router(get_subnet_router())
 
     """API routes"""
 

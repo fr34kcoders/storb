@@ -3,8 +3,8 @@ import base64
 import hashlib
 from datetime import UTC, datetime
 from io import BytesIO
-from threading import Lock, Thread
 from typing import AsyncGenerator, Literal
+import typing
 from urllib.parse import unquote
 
 import aiosqlite
@@ -44,8 +44,13 @@ from storb.util.piece import (
     piece_length,
     reconstruct_data_stream,
 )
-from storb.util.query import Payload, make_non_streamed_get, make_streamed_post
-from storb.util.uids import get_random_uids
+from storb.util.query import (
+    Payload,
+    make_non_streamed_get,
+    make_non_streamed_post,
+    make_streamed_post,
+)
+from storb.util.uids import get_random_hotkeys
 from storb.validator.reward import get_response_rate_scores
 
 logger = get_logger(__name__)
@@ -60,10 +65,6 @@ class Validator(Neuron):
         self.config = ValidatorConfig()
         add_validator_args(self, self.config._parser)
         self.config.save_config()
-
-        self.keypair = chain_utils.load_hotkey_keypair(
-            self.wallet_name, self.hotkey_name
-        )
 
         self.check_registration()
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
@@ -85,7 +86,7 @@ class Validator(Neuron):
         config = uvicorn.Config(
             self.app,
             host="0.0.0.0",
-            port=self.config.T.validator_api_port,
+            port=self.config.T.api_port,
         )
         self.server = uvicorn.Server(config)
 
@@ -327,9 +328,10 @@ class Validator(Neuron):
         endpoint: str,
         payload: Payload,
         method: Literal["GET", "POST"] = "POST",
-    ) -> AsyncGenerator[bytes, None] | httpx.Response:
+    ) -> tuple[str, typing.Optional[httpx.Response]]:
         """Send a query to a miner by making a streamed request"""
 
+        response = None
         node = self.metagraph.nodes.get(miner_hotkey)
         if not node:
             logger.error(
@@ -337,42 +339,51 @@ class Validator(Neuron):
             )
             return
 
-        server_addr = f"{node.protocol}://{node.ip}:{node.port}"
+        # TODO: this is broken
+        # server_addr = f"{node.protocol}://{node.ip}:{node.port}"
+        server_addr = f"http://{node.ip}:{node.port}"
 
-        symmetric_key_str, symmetric_key_uuid = await handshake.perform_handshake(
-            keypair=self.keypair,
-            httpx_client=self.httpx_client,
-            server_address=server_addr,
-            miner_hotkey_ss58_address=miner_hotkey,
-        )
-        if symmetric_key_str is None or symmetric_key_uuid is None:
-            logger.error(f"Miner {miner_hotkey}'s symmetric key or UUID is None")
-            return
-
-        if method == "GET":
-            return await make_non_streamed_get(
-                httpx_client=self.httpx_client,
-                server_address=server_addr,
-                validator_ss58_address=self.keypair.ss58_address,
-                symmetric_key_uuid=symmetric_key_uuid,
-                endpoint=endpoint,
-                timeout=QUERY_TIMEOUT,
-            )
-
-        if method == "POST":
-            return await make_streamed_post(
-                httpx_client=self.httpx_client,
-                server_address=server_addr,
-                validator_ss58_address=self.keypair.ss58_address,
-                miner_ss58_addres=miner_hotkey,
+        try:
+            symmetric_key_str, symmetric_key_uuid = await handshake.perform_handshake(
                 keypair=self.keypair,
-                endpoint=endpoint,
-                payload=payload,
-                timeout=QUERY_TIMEOUT,
+                httpx_client=self.httpx_client,
+                server_address=server_addr,
+                miner_hotkey_ss58_address=miner_hotkey,
             )
+            if symmetric_key_str is None or symmetric_key_uuid is None:
+                logger.error(f"Miner {miner_hotkey}'s symmetric key or UUID is None")
+                return
 
-        # Method not recognised otherwise
-        raise ValueError("HTTP method not supported")
+            if method == "GET":
+                logger.debug(f"GET {miner_hotkey}")
+                response = await make_non_streamed_get(
+                    httpx_client=self.httpx_client,
+                    server_address=server_addr,
+                    validator_ss58_address=self.keypair.ss58_address,
+                    symmetric_key_uuid=symmetric_key_uuid,
+                    endpoint=endpoint,
+                    timeout=QUERY_TIMEOUT,
+                )
+
+            if method == "POST":
+                logger.debug(f"POST {miner_hotkey}")
+                response = await make_non_streamed_post(
+                    httpx_client=self.httpx_client,
+                    server_address=server_addr,
+                    validator_ss58_address=self.keypair.ss58_address,
+                    miner_ss58_addres=miner_hotkey,
+                    keypair=self.keypair,
+                    endpoint=endpoint,
+                    payload=payload,
+                    timeout=QUERY_TIMEOUT,
+                )
+
+            # Method not recognised otherwise
+            raise ValueError("HTTP method not supported")
+        except Exception as e:
+            logger.warning(f"could not query miner!: {e}")
+
+            return (node.node_id, response)
 
     async def query_multiple_miners(
         self,
@@ -393,7 +404,7 @@ class Validator(Neuron):
     async def process_pieces(
         self,
         pieces: list[Piece],
-        uids: list[str],
+        hotkeys: list[str],
     ) -> tuple[list[str], list[tuple[str, bytes, int]]]:
         """Process pieces of data by generating their hashes, encoding them,
         and querying miners.
@@ -418,6 +429,11 @@ class Validator(Neuron):
         to_query = []
         curr_batch_size = 0
 
+        uids = []
+
+        for hotkey in hotkeys:
+            uids.append(self.metagraph.nodes[hotkey].node_id)
+
         async with db.get_db_connection(self.config.T.db_dir) as conn:
             miner_stats = await db.get_multiple_miner_stats(conn, uids)
 
@@ -430,7 +446,7 @@ class Validator(Neuron):
             for piece_idx, batch in enumerate(batch_responses):
                 for uid, response in batch:
                     miner_stats[uid]["store_attempts"] += 1
-                    logger.debug(f"uid: {uid} response: {response.preview_no_piece()}")
+                    logger.debug(f"uid: {uid} response: {response}")
 
                     # Verify piece hash
                     true_hash = piece_hashes[piece_idx]
@@ -459,9 +475,11 @@ class Validator(Neuron):
                 f"piece: {idx} | type: {piece_info.piece_type} | hash: {p_hash} | b64 preview: {piece_info.data[:10]}"
             )
 
+            logger.debug(f"hotkeys to query: {hotkeys}")
+
             task = asyncio.create_task(
                 self.query_multiple_miners(
-                    miner_hotkeys=uids,
+                    miner_hotkeys=hotkeys,
                     endpoint="/piece",
                     payload=Payload(
                         data=protocol.Store(
@@ -591,140 +609,129 @@ class Validator(Neuron):
             timestamp = str(datetime.now(UTC).timestamp())
 
             # TODO: Consider miner scores for selection, and not just their availability
-            uids = [int(x) for x in get_random_uids(self, NUM_UIDS_QUERY)]
-            logger.debug(f"uids to query: {uids}")
+            hotkeys = get_random_hotkeys(self, NUM_UIDS_QUERY)
+            logger.debug(f"hotkeys to query: {hotkeys}")
 
             chunk_hashes = []
             piece_hashes = set()
+            done_reading = False
 
             chunk_idx = 0
-            # shared_buffer = BytesIO()
-            # buffer_lock = asyncio.Lock()
-            shared_buffer = BytesIO()
-            buffer_condition = asyncio.Condition()
+            queue = asyncio.Queue()
 
-            def run_in_thread(coro):
-                """Runs an asyncio coroutine in a new thread with its own event loop."""
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(coro)
-                finally:
-                    loop.close()
-
-            async def producer():
+            async def producer(queue: asyncio.Queue):
+                nonlocal done_reading
                 try:
                     nonlocal request
-                    nonlocal shared_buffer
                     async for req_chunk in request.stream():
-                        # print("req chunk len:", len(req_chunk), "req chunk:", req_chunk)
-                        # with buffer_lock:
-                        async with buffer_condition:
-                            shared_buffer.write(req_chunk)
-                            buffer_condition.notify()  # Notify the consumer
+                        await queue.put(req_chunk)
+                    done_reading = True
                 except Exception as e:
                     logger.error(f"Error with producer: {e}")
 
-            async def consumer():
+            async def consumer(queue: asyncio.Queue):
                 nonlocal chunk_idx
-                async with buffer_condition:
-                    await buffer_condition.wait()  # Wait for the producer to notify
-                    len_buffer = shared_buffer.getbuffer().nbytes
-                    if len_buffer < chunk_size:
-                        await asyncio.sleep(0.1)
-                        return
+                nonlocal piece_hashes
+                nonlocal chunk_hashes
+                buffer = bytearray()
 
-                    shared_buffer.seek(0)  # Move to the beginning of the buffer
-                    # TODO: not rlly a buffer ig maybe rename lmao
-                    chunk_buffer = shared_buffer.read(chunk_size)
-                    shared_buffer.truncate(0)  # Clear the buffer
-                    shared_buffer.seek(0)  # Reset the pointer to the beginning
+                while True:
+                    read_data = await queue.get()
+                    buffer.extend(read_data)
 
-                    chunk_idx += 1 # TODO: do not increment prematurely
+                    if len(buffer) < chunk_size and not done_reading:
+                        queue.task_done()
+                        continue
+
+                    if done_reading and queue.empty():
+                        queue.task_done()
+                        break
+
+                    # Extract the first READ_SIZE bytes
+                    chunk_buffer = buffer[:chunk_size]
+                    # Remove them from the buffer
+                    del buffer[:chunk_size]
+
                     print(
                         "len chunk:",
                         len(chunk_buffer),
                         "chunk size:",
                         chunk_size,
-                        " len shared buffer:",
-                        len_buffer,
                     )
 
-                encoded_chunk = encode_chunk(chunk_buffer, chunk_idx)
-                sent_piece_hashes, _ = await self.process_pieces(
-                    pieces=encoded_chunk.pieces, uids=uids
-                )
-
-                dht_chunk = ChunkDHTValue(
-                    piece_hashes=sent_piece_hashes,
-                    chunk_idx=encoded_chunk.chunk_idx,
-                    k=encoded_chunk.k,
-                    m=encoded_chunk.m,
-                    chunk_size=encoded_chunk.chunk_size,
-                    padlen=encoded_chunk.padlen,
-                    original_chunk_length=encoded_chunk.original_chunk_length,
-                )
-
-                chunk_hash = hashlib.sha1(
-                    dht_chunk.model_dump_json().encode("utf-8")
-                ).hexdigest()
-
-                await self.dht.store_chunk_entry(chunk_hash, dht_chunk)
-
-                chunk_hashes.append(chunk_hash)
-                piece_hashes.update(sent_piece_hashes)
-                chunk_idx += 1
-
-                # TODO: Score responses - consider responses that return the piece id to be successful?
-
-                infohash, _ = generate_infohash(
-                    filename, timestamp, chunk_size, filesize, list(piece_hashes)
-                )
-                logger.debug(f"Generated pieces: {len(piece_hashes)}")
-
-                # Store infohash and metadata in the database
-                try:
-                    async with db.get_db_connection(db_dir=self.db_dir) as conn:
-                        await db.store_infohash_chunk_ids(conn, infohash, chunk_hashes)
-                except aiosqlite.OperationalError as e:
-                    raise HTTPException(
-                        status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Database error: {e}",
-                    )
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Unexpected database error: {e}",
+                    encoded_chunk = encode_chunk(chunk_buffer, chunk_idx)
+                    sent_piece_hashes, _ = await self.process_pieces(
+                        pieces=encoded_chunk.pieces, hotkeys=hotkeys
                     )
 
-                # Store data object metadata in the DHT
-                await self.dht.store_tracker_entry(
-                    infohash,
-                    TrackerDHTValue(
-                        validator_id=validator_id,
-                        filename=filename,
-                        length=filesize,
-                        chunk_length=chunk_size,
-                        chunk_count=len(chunk_hashes),
-                        chunk_hashes=chunk_hashes,
-                        creation_timestamp=timestamp,
-                    ),
+                    dht_chunk = ChunkDHTValue(
+                        piece_hashes=sent_piece_hashes,
+                        chunk_idx=encoded_chunk.chunk_idx,
+                        k=encoded_chunk.k,
+                        m=encoded_chunk.m,
+                        chunk_size=encoded_chunk.chunk_size,
+                        padlen=encoded_chunk.padlen,
+                        original_chunk_length=encoded_chunk.original_chunk_length,
+                    )
+
+                    chunk_hash = hashlib.sha1(
+                        dht_chunk.model_dump_json().encode("utf-8")
+                    ).hexdigest()
+
+                    await self.dht.store_chunk_entry(chunk_hash, dht_chunk)
+
+                    chunk_hashes.append(chunk_hash)
+                    piece_hashes.update(sent_piece_hashes)
+                    chunk_idx += 1
+                    queue.task_done()
+
+            consooomer = asyncio.create_task(consumer(queue))
+            await producer(queue)
+
+            # Wait until the consumers have processed all the data
+            await queue.join()
+
+            # stop consoooming
+            consooomer.cancel()
+
+            await asyncio.gather(consooomer, return_exceptions=True)
+
+            infohash, _ = generate_infohash(
+                filename, timestamp, chunk_size, filesize, list(piece_hashes)
+            )
+            logger.debug(f"Generated pieces: {len(piece_hashes)}")
+
+            # Store infohash and metadata in the database
+            try:
+                async with db.get_db_connection(db_dir=self.db_dir) as conn:
+                    await db.store_infohash_chunk_ids(conn, infohash, chunk_hashes)
+            except aiosqlite.OperationalError as e:
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Database error: {e}",
+                )
+            except Exception as e:
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Unexpected database error: {e}",
                 )
 
-                logger.info(f"Uploaded file with infohash: {infohash}")
-                return protocol.StoreResponse(infohash=infohash)
+            # Store data object metadata in the DHT
+            await self.dht.store_tracker_entry(
+                infohash,
+                TrackerDHTValue(
+                    validator_id=validator_id,
+                    filename=filename,
+                    length=filesize,
+                    chunk_length=chunk_size,
+                    chunk_count=len(chunk_hashes),
+                    chunk_hashes=chunk_hashes,
+                    creation_timestamp=timestamp,
+                ),
+            )
 
-            await asyncio.gather(producer(), consumer())
-            # consumer_thread = Thread(target=run_in_thread, args=(consumer(), ))
-            # producer_thread = Thread(target=run_in_thread, args=(producer(), ))
-
-            # # Start the threads
-            # consumer_thread.start()
-            # producer_thread.start()
-
-            # # Wait for both threads to complete
-            # consumer_thread.join()
-            # producer_thread.join()
+            logger.info(f"Uploaded file with infohash: {infohash}")
+            return protocol.StoreResponse(infohash=infohash)
 
         except HTTPException as e:
             logger.error(f"HTTP exception: {e.detail}")

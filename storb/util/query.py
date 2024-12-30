@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 
 @dataclass
-class Payload():
+class Payload:
     """Represents a payload for a request sent via httpx.
 
     Fields approximate httpx request types, although some types
@@ -55,6 +55,42 @@ def get_headers_with_nonce(
         fcst.NONCE: nonce,
         fcst.SIGNATURE: signature,
     }
+
+
+async def make_non_streamed_post(
+    httpx_client: httpx.AsyncClient,
+    server_address: str,
+    validator_ss58_address: str,
+    miner_ss58_address: str,
+    keypair: Keypair,
+    endpoint: str,
+    # payload: dict[str, Any],
+    payload: Payload,
+    timeout: float = QUERY_TIMEOUT,
+) -> httpx.Response:
+    content = (
+        bytes(str(payload.data or "").encode("utf-8"))
+        + bytes(str(payload.file or "").encode("utf-8"))
+        # + bytes(str(payload.content or "").encode("utf-8"))
+    )
+    headers = get_headers_with_nonce(
+        content, validator_ss58_address, miner_ss58_address, keypair
+    )
+
+    match payload:
+        case _:
+            raise TypeError("Invalid payload type")
+
+    files = {"upload-file": payload.file}
+
+    response = await httpx_client.post(
+        data=payload.data,
+        files=files,
+        timeout=timeout,
+        headers=headers,
+        url=server_address + endpoint,
+    )
+    return response
 
 
 async def make_streamed_post(

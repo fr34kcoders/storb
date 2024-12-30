@@ -6,7 +6,7 @@ from fiber.chain.metagraph import Metagraph
 from storb.neuron import Neuron
 
 
-def check_uid_availability(metagraph: Metagraph, uid: int) -> bool:
+def check_hotkey_availability(metagraph: Metagraph, hotkey: str) -> bool:
     """
     Check if uid is available. The UID should be available if it exists and
     does not have vtrust set (i.e. they're a miner).
@@ -24,18 +24,18 @@ def check_uid_availability(metagraph: Metagraph, uid: int) -> bool:
         True if uid is available, False otherwise
     """
 
-    node = metagraph.nodes.get(uid)
+    node = metagraph.nodes.get(hotkey)
     if not node:
         return False
 
     # If the neuron is a validator then it shouldn't have vtrust set
-    if not node.vtrust or node.vtrust == 0:
+    if node.vtrust != 0:
         return False
 
     return True
 
 
-def get_random_uids(self: Neuron, k: int, exclude: list[int] = None) -> np.ndarray:
+def get_random_hotkeys(self: Neuron, k: int, exclude: list[int] = None) -> list[str]:
     """
     Returns k available random uids from the metagraph.
 
@@ -57,27 +57,27 @@ def get_random_uids(self: Neuron, k: int, exclude: list[int] = None) -> np.ndarr
     the number of available `uids`.
     """
 
-    candidate_uids = []
-    avail_uids = []
+    candidate_hotkeys = []
+    avail_hotkeys = []
 
-    for uid in range(len(self.metagraph.nodes)):
-        uid_is_available = check_uid_availability(self.metagraph, uid)
-        uid_is_not_excluded = exclude is None or uid not in exclude
+    for hotkey in self.metagraph.nodes:
+        hotkey_is_available = check_hotkey_availability(self.metagraph, hotkey)
+        hotkey_is_not_excluded = exclude is None or hotkey not in exclude
 
-        if uid_is_available:
-            avail_uids.append(uid)
-            if uid_is_not_excluded:
-                candidate_uids.append(uid)
+        if hotkey_is_available:
+            avail_hotkeys.append(hotkey)
+            if hotkey_is_not_excluded:
+                candidate_hotkeys.append(hotkey)
 
-    # If k is larger than the number of available uids, set k to the number of available uids.
-    k = min(k, len(avail_uids))
-    # Check if candidate_uids contain enough for querying, if not grab all avaliable uids
-    available_uids = candidate_uids
+    # If k is larger than the number of available hotkeys, set k to the number of available hotkeys.
+    k = min(k, len(avail_hotkeys))
+    # Check if candidate_hotkeys contain enough for querying, if not grab all avaliable hotkeys
+    available_hotkeys = candidate_hotkeys
 
-    if len(candidate_uids) < k:
-        available_uids += random.sample(
-            [uid for uid in avail_uids if uid not in candidate_uids],
-            k - len(candidate_uids),
+    if len(candidate_hotkeys) < k:
+        available_hotkeys += random.sample(
+            [hotkey for hotkey in avail_hotkeys if hotkey not in candidate_hotkeys],
+            k - len(candidate_hotkeys),
         )
-    uids = np.array(random.sample(available_uids, k))
-    return uids
+    hotkeys = random.sample(available_hotkeys, k)
+    return hotkeys

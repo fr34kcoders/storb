@@ -7,7 +7,7 @@ import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from fiber.chain import interface
+from fiber.chain import chain_utils, interface, post_ip_to_chain
 from fiber.chain.metagraph import Metagraph
 from fiber.logging_utils import get_logger
 from substrateinterface.keypair import Keypair
@@ -39,12 +39,17 @@ class Neuron(ABC):
         self.app: FastAPI = None
         self.server: uvicorn.Server = None
         self.httpx_client: httpx.AsyncClient = None
-        self.api_port: int = 0
+        self.api_port: int = self.config.T.api_port
 
         self.wallet_name = self.config.T.wallet_name
         self.hotkey_name = self.config.T.hotkey_name
 
+        self.keypair = chain_utils.load_hotkey_keypair(
+            self.wallet_name, self.hotkey_name
+        )
+
         self.netuid = self.config.T.netuid
+        self.external_ip = self.config.T.external_ip
 
         self.subtensor_network = self.config.T.subtensor_network
         self.subtensor_address = self.config.T.subtensor_address
@@ -53,6 +58,16 @@ class Neuron(ABC):
             subtensor_network=self.subtensor_network,
             subtensor_address=self.subtensor_address,
         )
+
+        if self.config.T.post_ip:
+            post_ip_to_chain.post_node_ip_to_chain(
+                self.substrate,
+                self.keypair,
+                self.netuid,
+                self.external_ip,
+                self.api_port,
+                self.keypair.ss58_address,
+            )
 
         self.metagraph = Metagraph(netuid=self.netuid, substrate=self.substrate)
         self.metagraph.sync_nodes()

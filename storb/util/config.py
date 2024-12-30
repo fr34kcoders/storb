@@ -26,6 +26,9 @@ from storb.constants import (
 @dataclass
 class ConfigTable:
     netuid: int = 0
+    external_ip: str = "0.0.0.0"
+    api_port: int = 6969
+    post_ip: bool = False
 
     wallet_name: str = "default"
     hotkey_name: str = "default"
@@ -46,7 +49,6 @@ class ConfigTable:
 
 @dataclass
 class MinerConfigTable(ConfigTable):
-    miner_api_port: int = 6961
     store_dir: str = STORE_DIR
 
 
@@ -57,7 +59,6 @@ class ValidatorConfigTable(ConfigTable):
     neuron_moving_average_alpha: float = 0.1
     neuron_response_time_alpha: float = 0.1
 
-    validator_api_port: int = 6960
     synthetic: bool = False
     db_dir: str = VALIDATOR_DB_DIR
 
@@ -150,6 +151,25 @@ class Config:
         )
 
         self._parser.add_argument(
+            "--external_ip",
+            type=str,
+            help="External IP",
+        )
+
+        self._parser.add_argument(
+            "--api_port",
+            type=int,
+            help="API port for the node",
+        )
+
+        self._parser.add_argument(
+            "--post_ip",
+            help="If you want to run a organic validator",
+            type=lambda x: (str(x).lower() == "true"),
+            default=False,
+        )
+
+        self._parser.add_argument(
             "--wallet_name",
             type=str,
             help="Wallet name",
@@ -224,13 +244,8 @@ class MinerConfig(Config):
         super().__init__(config_table)
         # self.save_config()
 
-def add_miner_args(cls, parser):
-    parser.add_argument(
-        "--miner_api_port",
-        type=int,
-        help="API port for the miner",
-    )
 
+def add_miner_args(cls, parser):
     parser.add_argument(
         "--store_dir",
         type=str,
@@ -246,6 +261,7 @@ class ValidatorConfig(Config):
         super().__init__(config_table)
         print("does this shit get called")
         # self.save_config()
+
 
 def add_validator_args(cls, parser):
     parser.add_argument(
@@ -270,12 +286,6 @@ def add_validator_args(cls, parser):
         "--neuron_response_time_alpha",
         type=float,
         help="Moving average alpha parameter for response time scores",
-    )
-
-    parser.add_argument(
-        "--validator_api_port",
-        type=int,
-        help="API port for the validator",
     )
 
     parser.add_argument(
