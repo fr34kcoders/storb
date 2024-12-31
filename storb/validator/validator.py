@@ -1,10 +1,10 @@
 import asyncio
 import base64
 import hashlib
-from datetime import UTC, datetime
-from io import BytesIO
-from typing import AsyncGenerator, Literal
+import sys
 import typing
+from datetime import UTC, datetime
+from typing import AsyncGenerator, Literal, override
 from urllib.parse import unquote
 
 import aiosqlite
@@ -32,7 +32,7 @@ from storb.constants import (
 )
 from storb.dht.piece_dht import ChunkDHTValue, PieceDHTValue
 from storb.dht.tracker_dht import TrackerDHTValue
-from storb.neuron import Neuron
+from storb.neuron import SYNC_FREQUENCY, Neuron
 from storb.util.config import ValidatorConfig, add_validator_args
 from storb.util.infohash import generate_infohash
 from storb.util.middleware import FileSizeMiddleware, LoggerMiddleware
@@ -48,7 +48,6 @@ from storb.util.query import (
     Payload,
     make_non_streamed_get,
     make_non_streamed_post,
-    make_streamed_post,
 )
 from storb.util.uids import get_random_hotkeys
 from storb.validator.reward import get_response_rate_scores
@@ -75,6 +74,7 @@ class Validator(Neuron):
         self.query_timeout = self.config.T.query_timeout
 
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
+        self.symmetric_keys: dict[int, tuple[str, str]] = {}
 
     async def start(self):
         self.httpx_client = httpx.AsyncClient()
@@ -140,6 +140,48 @@ class Validator(Neuron):
             self.get_file,
             methods=["GET"],
         )
+
+    async def perform_handshakes(self):
+        logger.info("Performing handshakes with nodes...")
+        for node_hotkey, node in self.metagraph.nodes.items():
+            try:
+                server_addr = f"http://{node.ip}:{node.port}"
+                (
+                    symmetric_key_str,
+                    symmetric_key_uuid,
+                ) = await handshake.perform_handshake(
+                    keypair=self.keypair,
+                    httpx_client=self.httpx_client,
+                    server_address=server_addr,
+                    miner_hotkey_ss58_address=node_hotkey,
+                )
+                if symmetric_key_str is None or symmetric_key_uuid is None:
+                    logger.error(f"Node {node_hotkey}'s symmetric key or UUID is None")
+                    return
+
+                logger.info(f"🤝 Shook hands with Node {node_hotkey}!")
+
+                self.symmetric_keys[node.node_id] = (
+                    symmetric_key_str,
+                    symmetric_key_uuid,
+                )
+            except Exception as e:
+                logger.error(e)
+
+        logger.info("✅ Hands have been shaken!")
+
+    @override
+    async def sync_loop(self):
+        """Background task to sync metagraph"""
+
+        while True:
+            try:
+                await self.sync_metagraph()
+                await self.perform_handshakes()
+                await asyncio.sleep(SYNC_FREQUENCY)
+            except Exception as e:
+                logger.error(f"Error in sync loop: {e}")
+                await asyncio.sleep(SYNC_FREQUENCY // 2)
 
     async def get_miners_for_file(
         self, request: protocol.GetMiners
@@ -342,18 +384,9 @@ class Validator(Neuron):
         # TODO: this is broken
         # server_addr = f"{node.protocol}://{node.ip}:{node.port}"
         server_addr = f"http://{node.ip}:{node.port}"
+        _, symmetric_key_uuid = self.symmetric_keys.get(node.node_id)
 
         try:
-            symmetric_key_str, symmetric_key_uuid = await handshake.perform_handshake(
-                keypair=self.keypair,
-                httpx_client=self.httpx_client,
-                server_address=server_addr,
-                miner_hotkey_ss58_address=miner_hotkey,
-            )
-            if symmetric_key_str is None or symmetric_key_uuid is None:
-                logger.error(f"Miner {miner_hotkey}'s symmetric key or UUID is None")
-                return
-
             if method == "GET":
                 logger.debug(f"GET {miner_hotkey}")
                 response = await make_non_streamed_get(
@@ -371,7 +404,7 @@ class Validator(Neuron):
                     httpx_client=self.httpx_client,
                     server_address=server_addr,
                     validator_ss58_address=self.keypair.ss58_address,
-                    miner_ss58_addres=miner_hotkey,
+                    miner_ss58_address=miner_hotkey,
                     keypair=self.keypair,
                     endpoint=endpoint,
                     payload=payload,
@@ -637,53 +670,56 @@ class Validator(Neuron):
 
                 while True:
                     read_data = await queue.get()
-                    buffer.extend(read_data)
 
-                    if len(buffer) < chunk_size and not done_reading:
+                    try:
+                        buffer.extend(read_data)
+
+                        if len(buffer) < chunk_size and not done_reading:
+                            continue
+
+                        if done_reading and queue.empty():
+                            break
+
+                        # Extract the first READ_SIZE bytes
+                        chunk_buffer = buffer[:chunk_size]
+                        # Remove them from the buffer
+                        del buffer[:chunk_size]
+
+                        print(
+                            "len chunk:",
+                            len(chunk_buffer),
+                            "chunk size:",
+                            chunk_size,
+                        )
+
+                        encoded_chunk = encode_chunk(chunk_buffer, chunk_idx)
+                        sent_piece_hashes, _ = await self.process_pieces(
+                            pieces=encoded_chunk.pieces, hotkeys=hotkeys
+                        )
+
+                        dht_chunk = ChunkDHTValue(
+                            piece_hashes=sent_piece_hashes,
+                            chunk_idx=encoded_chunk.chunk_idx,
+                            k=encoded_chunk.k,
+                            m=encoded_chunk.m,
+                            chunk_size=encoded_chunk.chunk_size,
+                            padlen=encoded_chunk.padlen,
+                            original_chunk_length=encoded_chunk.original_chunk_length,
+                        )
+
+                        chunk_hash = hashlib.sha1(
+                            dht_chunk.model_dump_json().encode("utf-8")
+                        ).hexdigest()
+
+                        await self.dht.store_chunk_entry(chunk_hash, dht_chunk)
+
+                        chunk_hashes.append(chunk_hash)
+                        piece_hashes.update(sent_piece_hashes)
+                        chunk_idx += 1
+                    except Exception as e:
+                        logger.error(f"Error with consumer: {e}")
+                    finally:
                         queue.task_done()
-                        continue
-
-                    if done_reading and queue.empty():
-                        queue.task_done()
-                        break
-
-                    # Extract the first READ_SIZE bytes
-                    chunk_buffer = buffer[:chunk_size]
-                    # Remove them from the buffer
-                    del buffer[:chunk_size]
-
-                    print(
-                        "len chunk:",
-                        len(chunk_buffer),
-                        "chunk size:",
-                        chunk_size,
-                    )
-
-                    encoded_chunk = encode_chunk(chunk_buffer, chunk_idx)
-                    sent_piece_hashes, _ = await self.process_pieces(
-                        pieces=encoded_chunk.pieces, hotkeys=hotkeys
-                    )
-
-                    dht_chunk = ChunkDHTValue(
-                        piece_hashes=sent_piece_hashes,
-                        chunk_idx=encoded_chunk.chunk_idx,
-                        k=encoded_chunk.k,
-                        m=encoded_chunk.m,
-                        chunk_size=encoded_chunk.chunk_size,
-                        padlen=encoded_chunk.padlen,
-                        original_chunk_length=encoded_chunk.original_chunk_length,
-                    )
-
-                    chunk_hash = hashlib.sha1(
-                        dht_chunk.model_dump_json().encode("utf-8")
-                    ).hexdigest()
-
-                    await self.dht.store_chunk_entry(chunk_hash, dht_chunk)
-
-                    chunk_hashes.append(chunk_hash)
-                    piece_hashes.update(sent_piece_hashes)
-                    chunk_idx += 1
-                    queue.task_done()
 
             consooomer = asyncio.create_task(consumer(queue))
             await producer(queue)
@@ -744,6 +780,10 @@ class Validator(Neuron):
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Unexpected server error: {e}",
             )
+
+        except KeyboardInterrupt:
+            print("Script terminated by user.")
+            sys.exit(0)
 
     # TODO: WIP
     async def get_file(self, infohash: str):

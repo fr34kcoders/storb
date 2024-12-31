@@ -12,10 +12,7 @@ class Store(ProcessedPieceInfo):
     data: Optional[str] = Field(default=None)  # b64 encoded data
 
     def __str__(self) -> str:
-        return f"Store(piece_type={self.piece_type}, pad_len={self.pad_len}, piece_id={self.piece_id})"
-
-    def preview_no_piece(self) -> str:
-        return f"Store(piece_type={self.piece_type},  piece_id={self.piece_id})"
+        return f"Store(piece_type={self.piece_type}, piece_id={self.piece_id})"
 
 
 class Retrieve(BaseModel):

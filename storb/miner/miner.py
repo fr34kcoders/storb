@@ -4,7 +4,7 @@ import base64
 import httpx
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI
+from fastapi import Body, Depends, FastAPI, File, Request, UploadFile
 from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
@@ -81,7 +81,8 @@ class Miner(Neuron):
             self.store_piece,
             methods=["POST"],
             response_model=protocol.Store,
-            dependencies=[Depends(blacklist_low_stake), Depends(verify_request)],
+            # TODO: bring this back
+            # dependencies=[Depends(blacklist_low_stake), Depends(verify_request)],
         )
 
         self.app.add_api_route(
@@ -89,7 +90,7 @@ class Miner(Neuron):
             self.get_piece,
             methods=["GET"],
             response_model=protocol.Retrieve,
-            dependencies=[Depends(blacklist_low_stake), Depends(verify_request)],
+            # dependencies=[Depends(blacklist_low_stake), Depends(verify_request)],
         )
 
         self.app.include_router(get_subnet_router())
@@ -99,7 +100,9 @@ class Miner(Neuron):
     async def status(self) -> str:
         return "Hello from the Storb miner!"
 
-    async def store_piece(self, request: protocol.Store) -> protocol.Store:
+    async def store_piece(
+        self, request: protocol.Store = Body(...), piece: UploadFile = File(...)
+    ) -> protocol.Store:
         """Stores a piece which is received from a validator
 
         Parameters
@@ -113,6 +116,7 @@ class Miner(Neuron):
         """
 
         logger.debug("Received store request")
+        logger.debug(f"piece: {piece}")
         self.request_count += 1
 
         # TODO: Use raw bytes rather than b64 encoded str

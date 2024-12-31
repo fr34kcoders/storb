@@ -77,14 +77,10 @@ async def make_non_streamed_post(
         content, validator_ss58_address, miner_ss58_address, keypair
     )
 
-    match payload:
-        case _:
-            raise TypeError("Invalid payload type")
-
-    files = {"upload-file": payload.file}
+    files = {"piece": payload.file}
 
     response = await httpx_client.post(
-        data=payload.data,
+        json=payload.data.model_dump(),
         files=files,
         timeout=timeout,
         headers=headers,
