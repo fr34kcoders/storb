@@ -4,7 +4,7 @@ from enum import StrEnum
 QUERY_TIMEOUT = 10
 NUM_UIDS_QUERY = 10  # Default number of uids to query per store request
 QUERY_RATE = 10  # In blocks
-MAX_QUERY_BATCH_SIZE = 10  # Default max query batch size
+MAX_QUERY_BATCH_SIZE = 20  # Default max query batch size
 
 MIN_PIECE_SIZE = 16 * 1024  # 16 KiB
 MAX_PIECE_SIZE = 16 * 1024 * 1024  # 16 MiB

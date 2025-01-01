@@ -1,10 +1,9 @@
 import email
-from email.policy import default
 import json
-import re
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from email.policy import default
 from functools import lru_cache
 from typing import Any, AsyncGenerator, Mapping, Optional
 
@@ -15,10 +14,10 @@ from fiber import constants as fcst
 from fiber.chain import chain_utils, interface, signatures
 from fiber.chain.metagraph import Metagraph
 from fiber.logging_utils import get_logger
-from fiber.miner.core.configuration import Config, factory_config
+from fiber.miner.core.configuration import Config
 from fiber.miner.security import nonce_management
 from fiber.validator.generate_nonce import generate_nonce
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from storb.config import Config as StorbConfig
 from storb.constants import QUERY_TIMEOUT
@@ -128,83 +127,7 @@ def get_headers_with_nonce(
     }
 
 
-# async def process_response(response: httpx.Response):
-#     content_type = response.headers.get("Content-Type", "")
-
-#     if "application/json" in content_type:
-#         # If the response is JSON, parse it as JSON
-#         json_data = response.json()
-#         return json_data, None
-
-#     elif "multipart/mixed" in content_type:
-#         # If the response is multipart/mixed, process it
-#         boundary = content_type.split("boundary=")[1]
-#         parts = response.content.split(f"--{boundary}".encode())
-
-#         json_data = None
-#         file_content = None
-
-#         for part in parts:
-#             # Check for JSON part
-#             if b"Content-Type: application/json" in part:
-#                 json_payload = part.split(b"\r\n\r\n")[1]
-#                 json_data = json.loads(json_payload.decode("utf-8"))
-
-#             # Check for file part
-#             elif b"Content-Type: application/octet-stream" in part:
-#                 file_payload = part.split(b"\r\n\r\n")[1]
-#                 file_content = file_payload.rstrip(b"--")
-
-#         return json_data, file_content
-
-# else:
-#     raise ValueError("Unsupported Content-Type in response.")
-
-
-# async def process_response(response: httpx.Response):
-#     # Check Content-Type header
-#     content_type = response.headers.get("Content-Type", "")
-
-#     if "application/json" in content_type:
-#         # If the response is JSON, parse and return it
-#         json_data = response.json()
-#         return json_data, None
-
-#     elif "multipart/mixed" in content_type:
-#         # Handle multipart/mixed responses
-#         boundary = re.search(r"boundary=(.*)", content_type).group(1)
-#         parts = response.content.split(f"--{boundary}".encode())
-
-#         json_data = None
-#         file_content = None
-
-#         for part in parts:
-#             # Skip empty parts
-#             if not part.strip() or part == b"--":
-#                 continue
-
-#             # Separate headers and body
-#             try:
-#                 headers, body = part.split(b"\r\n\r\n", 1)
-#             except Exception as e:
-#                 # couldn't split this
-#                 continue
-
-#             # Check headers to identify part type
-#             if b"Content-Type: application/json" in headers:
-#                 json_data = json.loads(body.decode("utf-8").strip())
-
-#             elif b"Content-Type: application/octet-stream" in headers:
-#                 file_content = body.strip()
-
-#         return json_data, file_content
-
-#     else:
-#         raise ValueError("Unsupported Content-Type in response.")
-
-
 async def process_response(response: httpx.Response):
-    # Check Content-Type header
     content_type = response.headers.get("Content-Type", "")
 
     if "application/json" in content_type:
@@ -213,34 +136,35 @@ async def process_response(response: httpx.Response):
         return json_data, None
 
     elif "multipart/mixed" in content_type:
-        # Handle multipart/mixed responses
-        boundary = re.search(r"boundary=(.*)", content_type).group(1)
-        parts = response.content.split(f"--{boundary}".encode())
+        # Combine headers and body into a single MIME-compatible byte sequence
+        headers = f"Content-Type: {content_type}\r\n".encode("utf-8")
+        raw_message = headers + b"\r\n" + response.content
+
+        # Parse the multipart response using `message_from_bytes`
+        mime_message = email.message_from_bytes(raw_message, policy=default)
 
         json_data = None
         file_content = None
 
-        for part in parts:
-            # Skip empty or boundary-only parts
-            if not part.strip() or part.startswith(b"--"):
-                continue
+        # Iterate through each part of the multipart response
+        for part in mime_message.iter_parts():
+            content_disposition = part.get("Content-Disposition", "")
+            content_type = part.get_content_type()
 
-            # Separate headers and body
-            try:
-                headers, body = part.split(b"\r\n\r\n", 1)
-            except ValueError:
-                # Skip malformed parts
-                continue
-
-            # Check headers to identify part type
-            if b"Content-Type: application/json" in headers:
-                json_data = json.loads(body.decode("utf-8").strip())
-
-            elif b"Content-Type: application/octet-stream" in headers:
-                # Extract the raw file content (without any trailing boundary markers)
-                file_content = body.split(b"\r\n--")[0].strip()
+            if content_type == "application/json":
+                # Extract and parse the JSON part
+                json_data = json.loads(part.get_payload(decode=True).decode("utf-8"))
+            elif (
+                content_type == "application/octet-stream"
+                and "attachment" in content_disposition
+            ):
+                # Extract the file content as raw bytes
+                file_content = part.get_payload(decode=True)
 
         return json_data, file_content
+
+    else:
+        raise ValueError("Unsupported Content-Type in response.")
 
 
 async def make_non_streamed_post(

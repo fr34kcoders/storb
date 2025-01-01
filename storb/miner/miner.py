@@ -1,13 +1,12 @@
 import asyncio
-import base64
-import io
 import json
+import uuid
 from typing import Optional
 
-from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import uvicorn
-from fastapi import Body, Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi import Form, UploadFile
+from fastapi.responses import StreamingResponse
 from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
@@ -19,7 +18,7 @@ from storb.constants import NeuronType
 from storb.dht.piece_dht import PieceDHTValue
 from storb.neuron import Neuron
 from storb.util.middleware import LoggerMiddleware
-from storb.util.piece import PieceType, piece_hash
+from storb.util.piece import piece_hash
 from storb.util.query import factory_app
 from storb.util.store import ObjectStore
 
@@ -142,41 +141,6 @@ class Miner(Neuron):
 
         return response
 
-    # async def get_piece(self, request: protocol.Retrieve):
-    #     """Returns a piece from storage as JSON metadata and a file."""
-    #     logger.debug("Retrieving piece...")
-    #     logger.debug(f"piece_id to retrieve: {request.piece_id}")
-
-    #     # Fetch the piece from storage
-    #     piece = await self.object_store.read(request.piece_id)
-
-    #     # Create a JSON metadata response
-    #     metadata = protocol.Retrieve(piece_id=request.piece_id).dict()
-
-    #     # Combine the JSON response and the file in a multipart response
-    #     async def iter_response():
-    #         # Boundary for multipart response
-    #         boundary = "--boundary"
-
-    #         # JSON metadata
-    #         yield f"{boundary}\r\nContent-Type: application/json\r\n\r\n".encode(
-    #             "utf-8"
-    #         )
-    #         yield JSONResponse(metadata).body
-
-    #         # File part
-    #         yield f"\r\n{boundary}\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=piece_{request.piece_id}.bin\r\n\r\n".encode(
-    #             "utf-8"
-    #         )
-    #         yield piece
-
-    #         # End boundary
-    #         yield f"\r\n{boundary}--\r\n".encode("utf-8")
-
-    #     return StreamingResponse(
-    #         iter_response(), media_type="multipart/mixed; boundary=boundary"
-    #     )
-
     async def get_piece(self, request: protocol.Retrieve):
         """Returns a piece from storage as JSON metadata and a file."""
         logger.debug("Retrieving piece...")
@@ -189,7 +153,7 @@ class Miner(Neuron):
         metadata = protocol.Retrieve(piece_id=request.piece_id).model_dump()
 
         # Boundary definition
-        boundary = "boundary"
+        boundary = str(uuid.uuid4())
 
         async def iter_response():
             # JSON part
