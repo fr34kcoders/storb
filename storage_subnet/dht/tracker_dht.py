@@ -8,7 +8,7 @@ class TrackerDHTValue(BaseModel):
     validator_id: int
     filename: str
     length: int = Field(..., gt=0, description="File length must be greater than 0.")
-    chunk_length: int = Field(
+    chunk_size: int = Field(
         ..., gt=0, description="Chunk length must be greater than 0."
     )
     chunk_count: int = Field(

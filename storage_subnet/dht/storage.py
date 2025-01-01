@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import time
-from typing import Generator, Union
+from typing import Union
 
 import bittensor as bt
 from kademlia.storage import IStorage
@@ -66,10 +66,8 @@ class PersistentStorageDHT(IStorage):
         """
 
         self.db_path = db_dir
-        # We'll store in memory as:
         self.mem: dict[bytes, tuple[DHTValue, float]] = {}
 
-        # Create a dedicated event loop for DB in another thread
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._start_event_loop, daemon=True)
         self.thread.start()
@@ -254,7 +252,7 @@ class PersistentStorageDHT(IStorage):
                         validator_id=val.validator_id,
                         filename=val.filename,
                         length=val.length,
-                        chunk_length=val.chunk_length,
+                        chunk_size=val.chunk_size,
                         chunk_count=val.chunk_count,
                         chunk_hashes=val.chunk_hashes,
                         creation_timestamp=val.creation_timestamp,
@@ -346,7 +344,7 @@ class PersistentStorageDHT(IStorage):
                             validator_id=entry.validator_id,
                             filename=entry.filename,
                             length=entry.length,
-                            chunk_length=entry.chunk_length,
+                            chunk_size=entry.chunk_size,
                             chunk_count=entry.chunk_count,
                             chunk_hashes=entry.chunk_hashes,
                             creation_timestamp=entry.creation_timestamp,

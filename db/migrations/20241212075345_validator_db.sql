@@ -1,12 +1,12 @@
 -- migrate:up
 
--- Table for mapping infohash to file metadata and chunk IDs
+-- Table for mapping infohash to file metadata and chunk hashes
 CREATE TABLE tracker (
     infohash TEXT PRIMARY KEY, -- Infohash of the file
     validator_id INT,          -- ID of the validator
     filename TEXT,             -- Name of the file
     length INTEGER,            -- Length of the file in bytes
-    chunk_length INTEGER,      -- Length of each chunk in bytes
+    chunk_size INTEGER,      -- Length of each chunk in bytes
     chunk_count INTEGER,        -- Number of chunks in the file
     chunk_hashes TEXT,         -- JSON Array of chunk hashes
     creation_timestamp TEXT,    -- Timestamp of creation

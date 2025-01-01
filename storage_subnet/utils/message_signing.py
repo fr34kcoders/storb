@@ -29,7 +29,7 @@ class TrackerMessage(BaseModel):
     validator_id: int
     filename: str
     length: int
-    chunk_length: int
+    chunk_size: int
     chunk_count: int
     chunk_hashes: list[str]
     creation_timestamp: str

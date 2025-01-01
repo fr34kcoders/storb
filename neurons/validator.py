@@ -22,10 +22,8 @@ import hashlib
 import json
 import logging
 import logging.config
-from binascii import unhexlify
 from datetime import UTC, datetime
 
-import aiosqlite
 import bittensor as bt
 import numpy as np
 import uvicorn
@@ -36,7 +34,6 @@ from starlette.status import (
     HTTP_404_NOT_FOUND,
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
-from substrateinterface import Keypair
 
 import storage_subnet.validator.db as db
 
@@ -44,8 +41,6 @@ import storage_subnet.validator.db as db
 from storage_subnet.base.validator import BaseValidatorNeuron
 from storage_subnet.constants import (
     DHT_PORT,
-    EC_DATA_SIZE,
-    EC_PARITY_SIZE,
     MAX_UPLOAD_SIZE,
     QUERY_TIMEOUT,
     LogColor,
@@ -125,7 +120,7 @@ class Validator(BaseValidatorNeuron):
         self.axon.start()
 
     async def get_metadata(self, synapse: MetadataSynapse) -> MetadataResponse:
-        return obtain_metadata_dht(synapse.infohash)
+        return obtain_metadata(synapse.infohash)
 
     async def get_miners_for_file(self, synapse: GetMiners) -> GetMiners:
         """
@@ -350,7 +345,7 @@ async def vali() -> str:
 
 
 @app.get("/metadata/", response_model=MetadataResponse)
-async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataResponse:
+async def obtain_metadata(infohash: str, request: Request) -> MetadataResponse:
     bt.logging.info(f"Retrieving metadata for infohash: {infohash}")
     try:
         tracker_value = await core_validator.dht.get_tracker_entry(infohash)
@@ -362,7 +357,7 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
                 validator_id=tracker_value.validator_id,
                 filename=tracker_value.filename,
                 length=tracker_value.length,
-                chunk_length=tracker_value.chunk_length,
+                chunk_size=tracker_value.chunk_size,
                 chunk_count=tracker_value.chunk_count,
                 chunk_hashes=tracker_value.chunk_hashes,
                 creation_timestamp=tracker_value.creation_timestamp,
@@ -383,7 +378,7 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
             infohash=infohash,
             filename=tracker_value.filename,
             timestamp=tracker_value.creation_timestamp,
-            chunk_length=tracker_value.chunk_length,
+            chunk_size=tracker_value.chunk_size,
             length=tracker_value.length,
         )
     except Exception as e:
@@ -619,7 +614,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
             validator_id=validator_id,
             filename=filename,
             length=filesize,
-            chunk_length=piece_size,
+            chunk_size=piece_size,
             chunk_count=len(chunk_hashes),
             chunk_hashes=chunk_hashes,
             creation_timestamp=timestamp,
@@ -644,7 +639,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                 validator_id=validator_id,
                 filename=filename,
                 length=filesize,
-                chunk_length=chunk_size,
+                chunk_size=chunk_size,
                 chunk_count=len(chunk_hashes),
                 chunk_hashes=chunk_hashes,
                 creation_timestamp=timestamp,
@@ -689,7 +684,7 @@ async def retrieve_file(infohash: str):
             validator_id=tracker_value.validator_id,
             filename=tracker_value.filename,
             length=tracker_value.length,
-            chunk_length=tracker_value.chunk_length,
+            chunk_size=tracker_value.chunk_size,
             chunk_count=tracker_value.chunk_count,
             chunk_hashes=tracker_value.chunk_hashes,
             creation_timestamp=tracker_value.creation_timestamp,

@@ -21,8 +21,8 @@ EC_PARITY_SIZE = 2
 STORE_DIR = "object_store"
 
 # default validator database dir
-DB_DIR = "validator_database.db"
-DHT_SAVE_FILE = "dht_save_file.bin"
+DB_DIR = "miner_database.db"
+DHT_SAVE_FILE = "dht_miner_file.bin"
 
 
 class LogColor(StrEnum):

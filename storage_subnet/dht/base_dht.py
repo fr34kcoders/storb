@@ -59,15 +59,6 @@ class DHT:
         if os.path.exists(DHT_SAVE_FILE):
             bt.logging.debug(f"Loading DHT state from {DHT_SAVE_FILE}")
             try:
-                # log.info("Loading state from %s", fname)
-                # with open(fname, "rb") as file:
-                #     data = pickle.load(file)
-                #     svr = cls(data["ksize"], data["alpha"], data["id"])
-                #     await svr.listen(port, interface)
-                #     if data["neighbors"]:
-                #         await svr.bootstrap(data["neighbors"])
-                #     return svr
-
                 with open(DHT_SAVE_FILE, "rb") as f:
                     bt.logging.info("Loading state from %s", DHT_SAVE_FILE)
                     data = pickle.load(f)

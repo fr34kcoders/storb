@@ -45,7 +45,7 @@ class TrackerEntry(BaseModel):
     validator_id: int
     filename: str
     length: int
-    chunk_length: int
+    chunk_size: int
     chunk_count: int
     chunk_hashes: list[str]
     creation_timestamp: str
@@ -138,14 +138,14 @@ async def update_stats(conn: aiosqlite.Connection, miner_uid: int, stats: dict):
 
 async def set_tracker_entry(conn: aiosqlite.Connection, entry: TrackerEntry):
     query = """
-    INSERT INTO tracker (infohash, validator_id, filename, length, chunk_length, chunk_count, chunk_hashes, creation_timestamp, signature)
+    INSERT INTO tracker (infohash, validator_id, filename, length, chunk_size, chunk_count, chunk_hashes, creation_timestamp, signature)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(infohash)
     DO UPDATE SET
     validator_id = excluded.validator_id,
     filename = excluded.filename,
     length = excluded.length,
-    chunk_length = excluded.chunk_length,
+    chunk_size = excluded.chunk_size,
     chunk_count = excluded.chunk_count,
     chunk_hashes = excluded.chunk_hashes,
     creation_timestamp = excluded.creation_timestamp,
@@ -158,7 +158,7 @@ async def set_tracker_entry(conn: aiosqlite.Connection, entry: TrackerEntry):
             entry.validator_id,
             entry.filename,
             entry.length,
-            entry.chunk_length,
+            entry.chunk_size,
             entry.chunk_count,
             json.dumps(entry.chunk_hashes),
             entry.creation_timestamp,
@@ -181,7 +181,7 @@ async def get_tracker_entry(conn: aiosqlite.Connection, infohash: str):
                 validator_id=row[1],
                 filename=row[2],
                 length=row[3],
-                chunk_length=row[4],
+                chunk_size=row[4],
                 chunk_count=row[5],
                 chunk_hashes=json.loads(row[6]),
                 creation_timestamp=row[7],
