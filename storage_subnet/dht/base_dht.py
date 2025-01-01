@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import pickle
 import threading
 
 import bittensor as bt
@@ -33,6 +34,9 @@ class DHT:
         self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
         self.thread: threading.Thread | None = None
         self.bootstrap_node: tuple[str, int] | None = None
+        self.neighbor_nodes: list[
+            tuple[str, int]
+        ] = []  # Used when loading the state from the save file
         self.is_running: threading.Event = threading.Event()
 
     def _setup_server(self):
@@ -50,8 +54,50 @@ class DHT:
         """
 
         asyncio.set_event_loop(self.loop)
+
+        # Load the state from the save file if it exists
+        if os.path.exists(DHT_SAVE_FILE):
+            bt.logging.debug(f"Loading DHT state from {DHT_SAVE_FILE}")
+            try:
+                # log.info("Loading state from %s", fname)
+                # with open(fname, "rb") as file:
+                #     data = pickle.load(file)
+                #     svr = cls(data["ksize"], data["alpha"], data["id"])
+                #     await svr.listen(port, interface)
+                #     if data["neighbors"]:
+                #         await svr.bootstrap(data["neighbors"])
+                #     return svr
+
+                with open(DHT_SAVE_FILE, "rb") as f:
+                    bt.logging.info("Loading state from %s", DHT_SAVE_FILE)
+                    data = pickle.load(f)
+                    self.server = Server(
+                        storage=PersistentStorageDHT(),
+                        ksize=data["ksize"],
+                        alpha=data["alpha"],
+                        node_id=data["id"],
+                    )
+
+                    if data["neighbors"]:
+                        bt.logging.info(
+                            f"Bootstrapping DHT server with neighbors, {data['neighbors']}"
+                        )
+                        # Check if the neighbors are still alive
+                        for neighbor in data["neighbors"]:
+                            bt.logging.info(f"Adding neighbor {neighbor}")
+                            self.neighbor_nodes.append(neighbor)
+                    bt.logging.info("DHT state loaded successfully.")
+            except Exception as e:
+                bt.logging.error(f"Failed to load DHT state from {DHT_SAVE_FILE}: {e}")
+                raise RuntimeError(
+                    f"Failed to load DHT state from {DHT_SAVE_FILE}"
+                ) from e
+
         try:
             self.loop.run_until_complete(self.server.listen(self.port))
+            self.server.save_state_regularly(DHT_SAVE_FILE, 10)
+            for neighbor in self.neighbor_nodes:
+                self.loop.run_until_complete(self.server.bootstrap([neighbor]))
         except Exception as e:
             bt.logging.error(f"Failed to start server on port {self.port}: {e}")
             raise RuntimeError(f"Server failed to start on port {self.port}") from e
@@ -125,11 +171,6 @@ class DHT:
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._run_server, daemon=True)
         self.thread.start()
-
-        # Wait for the server to be ready
-        if not self.is_running.wait(timeout=self.startup_timeout):
-            bt.logging.error("DHT Server failed to start within the timeout period.")
-            raise RuntimeError("DHT Server did not start.")
 
         bt.logging.info("DHT Server thread started.")
 
