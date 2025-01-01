@@ -10,6 +10,9 @@ hotkey_name = "default"
 
 mock = false
 
+load_old_nodes = true
+min_stake_threshold = 1000
+
 [subtensor]
 network = "finney"
 address = "wss://entrypoint-finney.opentensor.ai:443"
