@@ -1,10 +1,12 @@
 import asyncio
 import base64
+import copy
 import hashlib
 import sys
+import time
 import typing
 from datetime import UTC, datetime
-from typing import AsyncGenerator, Literal, override
+from typing import AsyncGenerator, Literal, Optional, override
 from urllib.parse import unquote
 
 import aiosqlite
@@ -12,7 +14,11 @@ import httpx
 import numpy as np
 import uvicorn
 import uvicorn.config
-from fastapi import HTTPException, Request
+from fastapi import Body, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
+from fiber.encrypted.miner.endpoints.handshake import (
+    factory_router as get_subnet_router,
+)
 from fiber.encrypted.validator import handshake
 from fiber.logging_utils import get_logger
 from starlette.status import (
@@ -46,6 +52,7 @@ from storb.util.query import (
     factory_app,
     make_non_streamed_get,
     make_non_streamed_post,
+    process_response,
 )
 from storb.util.uids import get_random_hotkeys
 from storb.validator.reward import get_response_rate_scores
@@ -67,6 +74,10 @@ class Validator(Neuron):
 
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
         self.symmetric_keys: dict[int, tuple[str, str]] = {}
+        self.latencies = np.full(
+            len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
+        )
+        self.latency_scores = np.zeros(len(self.metagraph.nodes), dtype=np.float32)
 
     async def start(self):
         self.httpx_client = httpx.AsyncClient()
@@ -133,6 +144,14 @@ class Validator(Neuron):
             methods=["GET"],
         )
 
+        self.app.add_api_route(
+            "/miners",
+            self.get_miners_for_file,
+            methods=["POST"],
+        )
+
+        self.app.include_router(get_subnet_router())
+
     async def perform_handshakes(self):
         logger.info("Performing handshakes with nodes...")
         for node_hotkey, node in self.metagraph.nodes.items():
@@ -177,9 +196,11 @@ class Validator(Neuron):
                 logger.error(f"Error in sync loop: {e}")
                 await asyncio.sleep(SYNC_FREQUENCY // 2)
 
+    # TODO: change params?
     async def get_miners_for_file(
-        self, request: protocol.GetMiners
+        self, request: protocol.GetMiners = Body(...)
     ) -> protocol.GetMiners:
+        # TODO: change docstring?
         """Retrieve the list of miners responsible for storing the pieces of a
         file based on its infohash.
 
@@ -364,7 +385,7 @@ class Validator(Neuron):
         endpoint: str,
         payload: Payload,
         method: Literal["GET", "POST"] = "POST",
-    ) -> tuple[str, typing.Optional[httpx.Response]]:
+    ) -> tuple[str, typing.Optional[httpx.Response | Payload]]:
         """Send a query to a miner by making a streamed request"""
 
         response = None
@@ -373,7 +394,7 @@ class Validator(Neuron):
             logger.error(
                 f"The given miner hotkey {miner_hotkey} does not correspond to any known node"
             )
-            return
+            return None, response
 
         server_addr = f"http://{node.ip}:{node.port}"
         symmetric_key = self.symmetric_keys.get(node.node_id)
@@ -390,12 +411,16 @@ class Validator(Neuron):
                     server_address=server_addr,
                     validator_ss58_address=self.keypair.ss58_address,
                     symmetric_key_uuid=symmetric_key_uuid,
+                    payload=payload,
                     endpoint=endpoint,
                     timeout=QUERY_TIMEOUT,
                 )
-                response = protocol.Retrieve.model_validate(received.json())
+                # TODO: is there a better way to do all this?
+                # ig it's totally fine for now
+                response = payload.data.model_validate(received.json())
             if method == "POST":
                 logger.debug(f"POST {miner_hotkey}")
+                start_time = time.perf_counter()
                 received = await make_non_streamed_post(
                     httpx_client=self.httpx_client,
                     server_address=server_addr,
@@ -406,9 +431,26 @@ class Validator(Neuron):
                     payload=payload,
                     timeout=QUERY_TIMEOUT,
                 )
+                end_time = time.perf_counter()
+                time_elapsed = end_time - start_time
                 # TODO: is there a better way to do all this?
                 # ig it's totally fine for now
-                response = protocol.Store.model_validate(received.json())
+                json_data, file_content = await process_response(received)
+
+                data = None
+                if json_data or json_data != {"detail": "Not Found"}:
+                    try:
+                        data = payload.data.model_validate(json_data)
+                    except:
+                        logger.warning(
+                            "Payload data validation error, setting it to None"
+                        )
+                        data = None
+
+                response = Payload(
+                    data=data, file=file_content, time_elapsed=time_elapsed
+                )
+
             else:
                 # Method not recognised otherwise
                 raise ValueError("HTTP method not supported")
@@ -476,7 +518,10 @@ class Validator(Neuron):
             tasks = [task for _, task in to_query]
             batch_responses = await asyncio.gather(*tasks)
             for piece_idx, batch in enumerate(batch_responses):
-                for uid, response in batch:
+                for uid, recv_payload in batch:
+                    if not recv_payload:
+                        continue
+                    response = recv_payload.data
                     miner_stats[uid]["store_attempts"] += 1
                     logger.debug(f"uid: {uid} response: {response}")
                     if not response:
@@ -514,7 +559,7 @@ class Validator(Neuron):
             task = asyncio.create_task(
                 self.query_multiple_miners(
                     miner_hotkeys=hotkeys,
-                    endpoint="/piece",
+                    endpoint="/store",
                     payload=Payload(
                         data=protocol.Store(
                             chunk_idx=piece_info.chunk_idx,
@@ -614,15 +659,16 @@ class Validator(Neuron):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
-    async def upload_file(self, request: Request) -> protocol.StoreResponse:
+    async def upload_file(self, file: UploadFile = File(...)) -> protocol.StoreResponse:
         """Upload a file"""
 
         validator_id = self.uid
+        request = file
 
         try:
             print("req headers", request.headers)
             # TODO: currently filename isn't set so fix this
-            filename = unquote(request.headers.get("filename") or "filename")
+            filename = request.filename
             if not filename:
                 raise HTTPException(
                     status_code=HTTP_400_BAD_REQUEST,
@@ -630,7 +676,7 @@ class Validator(Neuron):
                 )
 
             try:
-                filesize = int(request.headers["Content-Length"])
+                filesize = request.size
                 logger.debug(f"Content size: {filesize}")
             except ValueError:
                 raise HTTPException(
@@ -655,10 +701,14 @@ class Validator(Neuron):
 
             async def producer(queue: asyncio.Queue):
                 nonlocal done_reading
+                nonlocal chunk_size
                 try:
                     nonlocal request
-                    async for req_chunk in request.stream():
-                        await queue.put(req_chunk)
+                    while True:
+                        chunk = await file.read(chunk_size)
+                        if not chunk:
+                            break
+                        await queue.put(chunk)  # Put the chunk in the queue
                     done_reading = True
                 except Exception as e:
                     logger.error(f"Error with producer: {e}")
@@ -675,14 +725,13 @@ class Validator(Neuron):
                     try:
                         buffer.extend(read_data)
 
+                        # TODO: does this cause bug?
                         if len(buffer) < chunk_size and not done_reading:
+                            # if len(buffer) < chunk_size:
                             continue
 
-                        if done_reading and queue.empty():
-                            break
-
                         # Extract the first READ_SIZE bytes
-                        chunk_buffer = buffer[:chunk_size]
+                        chunk_buffer = copy.copy(buffer[:chunk_size])
                         # Remove them from the buffer
                         del buffer[:chunk_size]
 
@@ -766,7 +815,7 @@ class Validator(Neuron):
                 ),
             )
 
-            logger.info(f"Generated unique pieces: {len(piece_hashes)}")
+            logger.info(f"Generated {len(piece_hashes)} unique pieces: {piece_hashes}")
             logger.info(f"Uploaded file with infohash: {infohash}")
             return protocol.StoreResponse(infohash=infohash)
 
@@ -793,17 +842,22 @@ class Validator(Neuron):
         # Get validator ID from tracker DHT given the infohash
         tracker_dht = await self.dht.get_tracker_entry(infohash)
         validator_to_ask = tracker_dht.validator_id
+        validator_hotkey = list(self.metagraph.nodes.keys())[validator_to_ask]
 
         # Get the uids of the miner(s) that store each respective piece
         # by asking the validator
         # TODO: query miner
 
+        # TODO: ew don't use this language
         synapse = protocol.GetMiners(infohash=infohash)
-        _, response = await self.query_miner(
-            miner_hotkey=validator_to_ask,
-            endpoint="",  # TODO: make endpoint for miner
-            synapse=synapse,
+        payload = Payload(data=synapse)
+        _, recv_payload = await self.query_miner(
+            miner_hotkey=validator_hotkey,
+            endpoint="/miners",
+            payload=payload,
         )
+
+        response = recv_payload.data
 
         # TODO get each group of miners per chunk instead of all at once?
         async with db.get_db_connection(self.db_dir) as conn:
@@ -836,15 +890,19 @@ class Validator(Neuron):
                 piece_ids.append(piece_id)
                 # TODO: many of these can be moved around and placed into their own functions
 
+                # TODO: ew don't use this language
                 # get piece(s) from miner(s)
                 synapse = protocol.Retrieve(piece_id=piece_id)
+                payload = Payload(data=synapse)
                 to_query.append(
                     asyncio.create_task(
                         self.query_miner(
-                            self=self,
-                            synapse=synapse,
-                            uid=chunk_pieces_metadata[piece_idx].miner_id,
-                            deserialize=True,
+                            # TODO: ew
+                            miner_hotkey=list(self.metagraph.nodes.keys())[
+                                chunk_pieces_metadata[piece_idx].miner_id
+                            ],
+                            endpoint="/retrieve",
+                            payload=payload,
                         )
                     )
                 )
@@ -860,13 +918,20 @@ class Validator(Neuron):
         response_piece_ids = []
         piece_ids_match = True
 
-        latencies = np.full(self.metagraph.n, QUERY_TIMEOUT, dtype=np.float32)
+        latencies = np.full(len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32)
 
         for idx, uid_and_response in enumerate(responses):
-            miner_uid, response = uid_and_response
+            miner_uid, recv_payload = uid_and_response
             miner_stats[miner_uid]["retrieval_attempts"] += 1
-            decoded_piece = base64.b64decode(response.piece.encode("utf-8"))
-            piece_id = piece_hash(decoded_piece)
+
+            if not recv_payload:
+                continue
+            elif not recv_payload.file:
+                continue
+
+            piece = recv_payload.file
+
+            piece_id = piece_hash(piece)
             # TODO: do we want to go through all the pieces/uids before returning the error?
             # perhaps we can return an error response, and after we can continue scoring the
             # miners in the background?
@@ -887,13 +952,13 @@ class Validator(Neuron):
             else:
                 miner_stats[miner_uid]["retrieval_successes"] += 1
                 miner_stats[miner_uid]["total_successes"] += 1
-                latencies[miner_uid] = response.dendrite.process_time
+                latencies[miner_uid] = recv_payload.time_elapsed
 
             piece = Piece(
                 chunk_idx=piece_meta.chunk_idx,
                 piece_idx=piece_meta.piece_idx,
                 piece_type=piece_meta.piece_type,
-                data=decoded_piece,
+                data=piece,
             )
 
             pieces.append(piece)
@@ -917,7 +982,7 @@ class Validator(Neuron):
             )
 
         # we use the ema here so that the latency score changes aren't so sudden
-        alpha: float = self.settings.neuron.validator.response_time_alpha
+        alpha: float = self.settings.neuron.response_time_alpha
         self.latencies = (alpha * latencies) + (1 - alpha) * self.latencies
         self.latency_scores = self.latencies / self.latencies.max()
 
@@ -928,7 +993,7 @@ class Validator(Neuron):
         headers = {
             "Content-Disposition": f"attachment; filename={tracker_dht.filename}"
         }
-        return protocol.StreamingResponse(
+        return StreamingResponse(
             file_generator(),
             media_type="application/octet-stream",
             headers=headers,

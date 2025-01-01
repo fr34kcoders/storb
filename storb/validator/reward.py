@@ -21,7 +21,7 @@ def get_response_rate_scores(
     uids = []
     weighted_rate_sums = []
 
-    uids_filter = list(range(self.metagraph.n))
+    uids_filter = list(range(len(self.metagraph.nodes)))
     for uid, miner_stats in miner_stats.items():
         if uid not in uids_filter:
             continue

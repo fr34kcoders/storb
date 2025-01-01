@@ -46,9 +46,8 @@ class Neuron(ABC):
         assert self.settings.wallet_name, "Wallet name is not defined"
         assert self.settings.hotkey_name, "Hotkey name is not defined"
 
-        print(
-            "!!!!! attempt to load hotkey keypair with wallet name:",
-            self.settings.wallet_name,
+        logger.info(
+            f"Attempt to load hotkey keypair with wallet name: {self.settings.wallet_name}"
         )
         self.keypair = chain_utils.load_hotkey_keypair(
             self.settings.wallet_name, self.settings.hotkey_name

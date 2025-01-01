@@ -1,8 +1,12 @@
+import email
+from email.policy import default
+import json
+import re
 import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, AsyncGenerator, Mapping
+from typing import Any, AsyncGenerator, Mapping, Optional
 
 import httpx
 from fastapi import FastAPI
@@ -14,7 +18,7 @@ from fiber.logging_utils import get_logger
 from fiber.miner.core.configuration import Config, factory_config
 from fiber.miner.security import nonce_management
 from fiber.validator.generate_nonce import generate_nonce
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from storb.config import Config as StorbConfig
 from storb.constants import QUERY_TIMEOUT
@@ -91,8 +95,9 @@ class Payload:
     """
 
     # content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None
-    data: BaseModel | Mapping[str, Any] | None
-    file: tuple[str, bytes] | None
+    data: Optional[BaseModel | Mapping[str, Any]] = None
+    file: Optional[tuple[str, bytes]] = None
+    time_elapsed: float = -1.0
 
 
 # https://github.com/rayonlabs/fiber/blob/production/fiber/validator/client.py
@@ -123,6 +128,121 @@ def get_headers_with_nonce(
     }
 
 
+# async def process_response(response: httpx.Response):
+#     content_type = response.headers.get("Content-Type", "")
+
+#     if "application/json" in content_type:
+#         # If the response is JSON, parse it as JSON
+#         json_data = response.json()
+#         return json_data, None
+
+#     elif "multipart/mixed" in content_type:
+#         # If the response is multipart/mixed, process it
+#         boundary = content_type.split("boundary=")[1]
+#         parts = response.content.split(f"--{boundary}".encode())
+
+#         json_data = None
+#         file_content = None
+
+#         for part in parts:
+#             # Check for JSON part
+#             if b"Content-Type: application/json" in part:
+#                 json_payload = part.split(b"\r\n\r\n")[1]
+#                 json_data = json.loads(json_payload.decode("utf-8"))
+
+#             # Check for file part
+#             elif b"Content-Type: application/octet-stream" in part:
+#                 file_payload = part.split(b"\r\n\r\n")[1]
+#                 file_content = file_payload.rstrip(b"--")
+
+#         return json_data, file_content
+
+# else:
+#     raise ValueError("Unsupported Content-Type in response.")
+
+
+# async def process_response(response: httpx.Response):
+#     # Check Content-Type header
+#     content_type = response.headers.get("Content-Type", "")
+
+#     if "application/json" in content_type:
+#         # If the response is JSON, parse and return it
+#         json_data = response.json()
+#         return json_data, None
+
+#     elif "multipart/mixed" in content_type:
+#         # Handle multipart/mixed responses
+#         boundary = re.search(r"boundary=(.*)", content_type).group(1)
+#         parts = response.content.split(f"--{boundary}".encode())
+
+#         json_data = None
+#         file_content = None
+
+#         for part in parts:
+#             # Skip empty parts
+#             if not part.strip() or part == b"--":
+#                 continue
+
+#             # Separate headers and body
+#             try:
+#                 headers, body = part.split(b"\r\n\r\n", 1)
+#             except Exception as e:
+#                 # couldn't split this
+#                 continue
+
+#             # Check headers to identify part type
+#             if b"Content-Type: application/json" in headers:
+#                 json_data = json.loads(body.decode("utf-8").strip())
+
+#             elif b"Content-Type: application/octet-stream" in headers:
+#                 file_content = body.strip()
+
+#         return json_data, file_content
+
+#     else:
+#         raise ValueError("Unsupported Content-Type in response.")
+
+
+async def process_response(response: httpx.Response):
+    # Check Content-Type header
+    content_type = response.headers.get("Content-Type", "")
+
+    if "application/json" in content_type:
+        # If the response is JSON, parse and return it
+        json_data = response.json()
+        return json_data, None
+
+    elif "multipart/mixed" in content_type:
+        # Handle multipart/mixed responses
+        boundary = re.search(r"boundary=(.*)", content_type).group(1)
+        parts = response.content.split(f"--{boundary}".encode())
+
+        json_data = None
+        file_content = None
+
+        for part in parts:
+            # Skip empty or boundary-only parts
+            if not part.strip() or part.startswith(b"--"):
+                continue
+
+            # Separate headers and body
+            try:
+                headers, body = part.split(b"\r\n\r\n", 1)
+            except ValueError:
+                # Skip malformed parts
+                continue
+
+            # Check headers to identify part type
+            if b"Content-Type: application/json" in headers:
+                json_data = json.loads(body.decode("utf-8").strip())
+
+            elif b"Content-Type: application/octet-stream" in headers:
+                # Extract the raw file content (without any trailing boundary markers)
+                file_content = body.split(b"\r\n--")[0].strip()
+
+        return json_data, file_content
+
+
 async def make_non_streamed_post(
     httpx_client: httpx.AsyncClient,
     server_address: str,
@@ -130,30 +250,48 @@ async def make_non_streamed_post(
     miner_ss58_address: str,
     keypair: Keypair,
     endpoint: str,
-    # payload: dict[str, Any],
     payload: Payload,
     timeout: float = QUERY_TIMEOUT,
 ) -> httpx.Response:
-    content = (
-        bytes(str(payload.data or "").encode("utf-8"))
-        + bytes(str(payload.file or "").encode("utf-8"))
-        # + bytes(str(payload.content or "").encode("utf-8"))
+    # Prepare the headers with a nonce
+    content = bytes(str(payload.data or "").encode("utf-8")) + (
+        bytes(str(payload.file or "").encode("utf-8")) if payload.file else b""
     )
     headers = get_headers_with_nonce(
         content, validator_ss58_address, miner_ss58_address, keypair
     )
 
-    files = {
-        "json_data": (None, payload.data.model_dump_json(), "application/json"),
-        "piece": payload.file,
-    }
+    # Separate JSON and file logic
+    if payload.file:
+        # If a file is present, send it with the `files` parameter
+        files = {
+            "file": payload.file,
+        }
+        # Optionally include JSON data as a separate form field
+        if payload.data:
+            files["json_data"] = (
+                None,
+                payload.data.model_dump_json(),
+                "application/json",
+            )
+        response = await httpx_client.post(
+            url=server_address + endpoint,
+            files=files,
+            headers=headers,
+            timeout=timeout,
+        )
+    elif payload.data:
+        # If only JSON data is present, use the `json` parameter
+        response = await httpx_client.post(
+            url=server_address + endpoint,
+            json=payload.data.model_dump(),
+            headers=headers,
+            timeout=timeout,
+        )
+    else:
+        # Handle case where neither JSON nor file is provided
+        raise ValueError("Payload must include at least one of `data` or `file`.")
 
-    response = await httpx_client.post(
-        files=files,
-        timeout=timeout,
-        headers=headers,
-        url=server_address + endpoint,
-    )
     return response
 
 
@@ -222,10 +360,12 @@ async def make_non_streamed_get(
     validator_ss58_address: str,
     symmetric_key_uuid: str,
     endpoint: str,
+    payload: Payload,
     timeout: float = QUERY_TIMEOUT,
 ) -> httpx.Response:
     headers = _get_headers(symmetric_key_uuid, validator_ss58_address)
     response = await httpx_client.get(
+        json=payload.data.model_dump(),
         url=server_address + endpoint,
         headers=headers,
         timeout=timeout,

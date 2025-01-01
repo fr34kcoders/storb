@@ -1,7 +1,10 @@
 import asyncio
 import base64
+import io
+import json
 from typing import Optional
 
+from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
 import uvicorn
 from fastapi import Body, Depends, FastAPI, File, Form, Request, UploadFile
@@ -68,7 +71,7 @@ class Miner(Neuron):
         )
 
         self.app.add_api_route(
-            "/piece",
+            "/store",
             self.store_piece,
             methods=["POST"],
             response_model=protocol.Store,
@@ -77,10 +80,10 @@ class Miner(Neuron):
         )
 
         self.app.add_api_route(
-            "/piece",
+            "/retrieve",
             self.get_piece,
-            methods=["GET"],
-            response_model=protocol.Retrieve,
+            methods=["POST"],
+            # response_model=protocol.Retrieve,
             # dependencies=[Depends(blacklist_low_stake), Depends(verify_request)],
         )
 
@@ -92,7 +95,7 @@ class Miner(Neuron):
         return "Hello from the Storb miner!"
 
     async def store_piece(
-        self, json_data: Optional[str] = Form(None), piece: Optional[UploadFile] = None
+        self, json_data: Optional[str] = Form(None), file: Optional[UploadFile] = None
     ) -> protocol.Store:
         """Stores a piece which is received from a validator.
 
@@ -113,7 +116,7 @@ class Miner(Neuron):
 
         # TODO: Use raw bytes rather than b64 encoded str
         piece_info = protocol.Store.model_validate_json(json_data)
-        piece_bytes = await piece.read()
+        piece_bytes = await file.read()
         piece_id = piece_hash(piece_bytes)
         logger.debug(
             f"ptype: {piece_info.piece_type} | piece preview: {piece_bytes[:10]} | hash: {piece_id}"
@@ -139,25 +142,73 @@ class Miner(Neuron):
 
         return response
 
-    async def get_piece(self, request: protocol.Retrieve) -> protocol.Retrieve:
-        """Returns a piece from storage
+    # async def get_piece(self, request: protocol.Retrieve):
+    #     """Returns a piece from storage as JSON metadata and a file."""
+    #     logger.debug("Retrieving piece...")
+    #     logger.debug(f"piece_id to retrieve: {request.piece_id}")
 
-        Parameters
-        ----------
-        request : protocol.Retrieve
-            The request object containing piece metadata
+    #     # Fetch the piece from storage
+    #     piece = await self.object_store.read(request.piece_id)
 
-        Returns
-        --------
-        protocol.Retrieve
-        """
+    #     # Create a JSON metadata response
+    #     metadata = protocol.Retrieve(piece_id=request.piece_id).dict()
 
+    #     # Combine the JSON response and the file in a multipart response
+    #     async def iter_response():
+    #         # Boundary for multipart response
+    #         boundary = "--boundary"
+
+    #         # JSON metadata
+    #         yield f"{boundary}\r\nContent-Type: application/json\r\n\r\n".encode(
+    #             "utf-8"
+    #         )
+    #         yield JSONResponse(metadata).body
+
+    #         # File part
+    #         yield f"\r\n{boundary}\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=piece_{request.piece_id}.bin\r\n\r\n".encode(
+    #             "utf-8"
+    #         )
+    #         yield piece
+
+    #         # End boundary
+    #         yield f"\r\n{boundary}--\r\n".encode("utf-8")
+
+    #     return StreamingResponse(
+    #         iter_response(), media_type="multipart/mixed; boundary=boundary"
+    #     )
+
+    async def get_piece(self, request: protocol.Retrieve):
+        """Returns a piece from storage as JSON metadata and a file."""
         logger.debug("Retrieving piece...")
         logger.debug(f"piece_id to retrieve: {request.piece_id}")
 
-        contents = await self.object_store.read(request.piece_id)
-        b64_encoded_piece = base64.b64encode(contents)
-        b64_encoded_piece = b64_encoded_piece.decode("utf-8")
-        response = protocol.Retrieve(piece_id=request.piece_id, piece=b64_encoded_piece)
+        # Fetch the piece from storage
+        piece = await self.object_store.read(request.piece_id)
 
-        return response
+        # Create the JSON metadata response
+        metadata = protocol.Retrieve(piece_id=request.piece_id).model_dump()
+
+        # Boundary definition
+        boundary = "boundary"
+
+        async def iter_response():
+            # JSON part
+            yield f"--{boundary}\r\n".encode("utf-8")
+            yield b"Content-Type: application/json\r\n\r\n"
+            yield json.dumps(metadata).encode("utf-8")
+
+            # File part
+            if piece:
+                yield f"\r\n--{boundary}\r\n".encode("utf-8")
+                yield b"Content-Type: application/octet-stream\r\n"
+                yield f"Content-Disposition: attachment; filename=piece_{request.piece_id}.bin\r\n\r\n".encode(
+                    "utf-8"
+                )
+                yield piece
+
+            # End boundary
+            yield f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+        return StreamingResponse(
+            iter_response(), media_type=f"multipart/mixed; boundary={boundary}"
+        )
