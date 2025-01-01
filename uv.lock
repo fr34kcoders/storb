@@ -1483,7 +1483,7 @@ dev = [
 [[package]]
 name = "storb-kademlia"
 version = "0.1.0"
-source = { git = "https://github.com/fr34kcoders/storb-kademlia.git#fa74ef5b4a96bb25f50464fa16c1d59e8397c0d7" }
+source = { git = "https://github.com/fr34kcoders/storb-kademlia.git#562117f4721a8fdfbe04f216686dc8203d85a290" }
 dependencies = [
     { name = "rpcudp" },
 ]

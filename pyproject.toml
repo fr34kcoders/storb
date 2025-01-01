@@ -23,9 +23,9 @@ dependencies = [
     "python-multipart>=0.0.19",
     "rich>=13.9.4",
     "starlette==0.37.2",
+    "storb-kademlia",
     "uvicorn>=0.32.1",
     "zfec>=1.6.0.0",
-    "storb-kademlia",
 ]
 
 [dependency-groups]
