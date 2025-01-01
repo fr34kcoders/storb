@@ -378,13 +378,14 @@ class Validator(Neuron):
         server_addr = f"http://{node.ip}:{node.port}"
         symmetric_key = self.symmetric_keys.get(node.node_id)
         if not symmetric_key:
-            raise KeyError(f"Entry for node ID {node.node_id} not found")
+            logger.warning(f"Entry for node ID {node.node_id} not found")
+            return node.node_id, None
         _, symmetric_key_uuid = symmetric_key
 
         try:
             if method == "GET":
                 logger.debug(f"GET {miner_hotkey}")
-                response = await make_non_streamed_get(
+                received = await make_non_streamed_get(
                     httpx_client=self.httpx_client,
                     server_address=server_addr,
                     validator_ss58_address=self.keypair.ss58_address,
@@ -392,10 +393,10 @@ class Validator(Neuron):
                     endpoint=endpoint,
                     timeout=QUERY_TIMEOUT,
                 )
-
+                response = protocol.Retrieve.model_validate(received.json())
             if method == "POST":
                 logger.debug(f"POST {miner_hotkey}")
-                response = await make_non_streamed_post(
+                received = await make_non_streamed_post(
                     httpx_client=self.httpx_client,
                     server_address=server_addr,
                     validator_ss58_address=self.keypair.ss58_address,
@@ -405,13 +406,16 @@ class Validator(Neuron):
                     payload=payload,
                     timeout=QUERY_TIMEOUT,
                 )
-
-            # Method not recognised otherwise
-            raise ValueError("HTTP method not supported")
+                # TODO: is there a better way to do all this?
+                # ig it's totally fine for now
+                response = protocol.Store.model_validate(received.json())
+            else:
+                # Method not recognised otherwise
+                raise ValueError("HTTP method not supported")
         except Exception as e:
             logger.warning(f"could not query miner!: {e}")
 
-            return (node.node_id, response)
+        return node.node_id, response
 
     async def query_multiple_miners(
         self,
@@ -475,6 +479,8 @@ class Validator(Neuron):
                 for uid, response in batch:
                     miner_stats[uid]["store_attempts"] += 1
                     logger.debug(f"uid: {uid} response: {response}")
+                    if not response:
+                        continue
 
                     # Verify piece hash
                     true_hash = piece_hashes[piece_idx]
@@ -730,7 +736,6 @@ class Validator(Neuron):
             infohash, _ = generate_infohash(
                 filename, timestamp, chunk_size, filesize, list(piece_hashes)
             )
-            logger.debug(f"Generated pieces: {len(piece_hashes)}")
 
             # Store infohash and metadata in the database
             try:
@@ -761,6 +766,7 @@ class Validator(Neuron):
                 ),
             )
 
+            logger.info(f"Generated unique pieces: {len(piece_hashes)}")
             logger.info(f"Uploaded file with infohash: {infohash}")
             return protocol.StoreResponse(infohash=infohash)
 

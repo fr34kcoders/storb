@@ -143,10 +143,12 @@ async def make_non_streamed_post(
         content, validator_ss58_address, miner_ss58_address, keypair
     )
 
-    files = {"piece": payload.file}
+    files = {
+        "json_data": (None, payload.data.model_dump_json(), "application/json"),
+        "piece": payload.file,
+    }
 
     response = await httpx_client.post(
-        json=payload.data.model_dump(),
         files=files,
         timeout=timeout,
         headers=headers,

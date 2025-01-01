@@ -13,8 +13,6 @@ async def main():
     await miner.start()
 
     logger.info(f"Miner running... timestamp: {time.time()}")
-    logger.debug(f"Received Request count: {miner.request_count}")
-    logger.debug(f"Stored Piece count: {miner.piece_count}")
 
     try:
         while True:
