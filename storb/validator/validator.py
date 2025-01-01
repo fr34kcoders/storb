@@ -14,7 +14,6 @@ import uvicorn
 import uvicorn.config
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request
-from fiber.chain import chain_utils
 from fiber.encrypted.validator import handshake
 from fiber.logging_utils import get_logger
 from fiber.miner.server import factory_app
@@ -165,6 +164,8 @@ class Validator(Neuron):
                     symmetric_key_str,
                     symmetric_key_uuid,
                 )
+            except httpx.ConnectTimeout:
+                logger.warning("Connection has timed out")
             except Exception as e:
                 logger.error(e)
 
@@ -381,10 +382,11 @@ class Validator(Neuron):
             )
             return
 
-        # TODO: this is broken
-        # server_addr = f"{node.protocol}://{node.ip}:{node.port}"
         server_addr = f"http://{node.ip}:{node.port}"
-        _, symmetric_key_uuid = self.symmetric_keys.get(node.node_id)
+        symmetric_key = self.symmetric_keys.get(node.node_id)
+        if not symmetric_key:
+            raise KeyError(f"Entry for node ID {node.node_id} not found")
+        _, symmetric_key_uuid = symmetric_key
 
         try:
             if method == "GET":
