@@ -34,3 +34,9 @@ class LogColor(StrEnum):
 
 # Default DHT port
 DHT_PORT = 6942
+
+
+class NeuronType(StrEnum):
+    Base = "base"
+    Miner = "miner"
+    Validator = "validator"

@@ -12,11 +12,9 @@ import httpx
 import numpy as np
 import uvicorn
 import uvicorn.config
-from dotenv import load_dotenv
 from fastapi import HTTPException, Request
 from fiber.encrypted.validator import handshake
 from fiber.logging_utils import get_logger
-from fiber.miner.server import factory_app
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
@@ -28,11 +26,11 @@ from storb import protocol
 from storb.constants import (
     NUM_UIDS_QUERY,
     QUERY_TIMEOUT,
+    NeuronType,
 )
 from storb.dht.piece_dht import ChunkDHTValue, PieceDHTValue
 from storb.dht.tracker_dht import TrackerDHTValue
 from storb.neuron import SYNC_FREQUENCY, Neuron
-from storb.util.config import ValidatorConfig, add_validator_args
 from storb.util.infohash import generate_infohash
 from storb.util.middleware import FileSizeMiddleware, LoggerMiddleware
 from storb.util.piece import (
@@ -45,6 +43,7 @@ from storb.util.piece import (
 )
 from storb.util.query import (
     Payload,
+    factory_app,
     make_non_streamed_get,
     make_non_streamed_post,
 )
@@ -56,21 +55,15 @@ logger = get_logger(__name__)
 
 class Validator(Neuron):
     def __init__(self):
-        super(Validator, self).__init__()
-
-        load_dotenv()
-
-        self.config = ValidatorConfig()
-        add_validator_args(self, self.config._parser)
-        self.config.save_config()
+        super(Validator, self).__init__(NeuronType.Validator)
 
         self.check_registration()
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
 
         # TODO: have list of connected miners
 
-        self.db_dir = self.config.T.db_dir
-        self.query_timeout = self.config.T.query_timeout
+        self.db_dir = self.settings.validator.db_dir
+        self.query_timeout = self.settings.validator.query.timeout
 
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
         self.symmetric_keys: dict[int, tuple[str, str]] = {}
@@ -85,7 +78,7 @@ class Validator(Neuron):
         config = uvicorn.Config(
             self.app,
             host="0.0.0.0",
-            port=self.config.T.api_port,
+            port=self.settings.api_port,
         )
         self.server = uvicorn.Server(config)
 
@@ -102,7 +95,7 @@ class Validator(Neuron):
     def app_init(self):
         """Initialise FastAPI routes and middleware"""
 
-        self.app = factory_app(debug=False)
+        self.app = factory_app(self.config, debug=False)
 
         self.app.add_middleware(LoggerMiddleware)
         self.app.add_middleware(FileSizeMiddleware)
@@ -219,7 +212,7 @@ class Validator(Neuron):
         chunks_metadatas = []
         multi_piece_meta = []
 
-        async with db.get_db_connection(db_dir=self.config.T.db_dir) as conn:
+        async with db.get_db_connection(db_dir=self.db_dir) as conn:
             # TODO: erm we shouldn't need to access the array of chunk ids like this?
             # something might be wrong with get_chunks_from_infohash()
             chunk_ids = (await db.get_chunks_from_infohash(conn, infohash))["chunk_ids"]
@@ -276,7 +269,7 @@ class Validator(Neuron):
         # scoring
 
         # obtain all miner stats from the validator database
-        async with db.get_db_connection(self.config.T.db_dir) as conn:
+        async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
 
         # calculate the score(s) for uids given their stats
@@ -469,7 +462,7 @@ class Validator(Neuron):
         for hotkey in hotkeys:
             uids.append(self.metagraph.nodes[hotkey].node_id)
 
-        async with db.get_db_connection(self.config.T.db_dir) as conn:
+        async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_multiple_miner_stats(conn, uids)
 
         async def handle_batch_requests():
@@ -531,7 +524,7 @@ class Validator(Neuron):
             curr_batch_size += 1
 
             # Send batch requests if batch size is reached
-            if curr_batch_size >= self.config.T.query_batch_size:
+            if curr_batch_size >= self.settings.validator.query.batch_size:
                 logger.info(f"Sending {curr_batch_size} batched requests...")
                 await handle_batch_requests()
                 curr_batch_size = 0
@@ -544,7 +537,7 @@ class Validator(Neuron):
         logger.debug(f"Processed {len(piece_hashes)} pieces.")
 
         # update miner stats table in db
-        async with db.get_db_connection(self.config.T.db_dir) as conn:
+        async with db.get_db_connection(self.db_dir) as conn:
             for miner_uid in uids:
                 await db.update_stats(
                     conn,
@@ -807,7 +800,7 @@ class Validator(Neuron):
         )
 
         # TODO get each group of miners per chunk instead of all at once?
-        async with db.get_db_connection(self.config.T.db_dir) as conn:
+        async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
 
         logger.info(f"Response from validator {validator_to_ask}: {response}")
@@ -903,7 +896,7 @@ class Validator(Neuron):
         logger.debug(f"tracker_dht: {tracker_dht}")
 
         # update miner(s) stats in validator db
-        async with db.get_db_connection(self.config.T.db_dir) as conn:
+        async with db.get_db_connection(self.db_dir) as conn:
             for miner_uid, miner_stat in miner_stats.items():
                 await db.update_stats(
                     conn,
@@ -918,7 +911,7 @@ class Validator(Neuron):
             )
 
         # we use the ema here so that the latency score changes aren't so sudden
-        alpha: float = self.config.neuron.response_time_alpha
+        alpha: float = self.settings.neuron.validator.response_time_alpha
         self.latencies = (alpha * latencies) + (1 - alpha) * self.latencies
         self.latency_scores = self.latencies / self.latencies.max()
 

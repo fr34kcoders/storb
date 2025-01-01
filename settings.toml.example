@@ -1,0 +1,45 @@
+version = "0.1.0"
+
+netuid = 0
+external_ip = "0.0.0.0"
+api_port = 6969
+post_ip = false
+
+wallet_name = "default"
+hotkey_name = "default"
+
+mock = false
+
+[subtensor]
+network = "finney"
+address = "wss://entrypoint-finney.opentensor.ai:443"
+
+[neuron]
+epoch_length = 100
+events_retention_size = 2147483648 # 2 GiB
+dont_save_events = false
+
+[dht]
+port = 6942
+
+[dht.bootstrap]
+ip = ""     # IPv4 format
+port = 6942
+
+[miner]
+store_dir = "object_store"
+
+[validator]
+synthetic = false
+db_dir = "validator_database.db"
+
+[validator.neuron]
+num_concurrent_forwards = 1
+disable_set_weights = false
+moving_average_alpha = 0.1
+response_time_alpha = 0.1
+
+[validator.query]
+batch_size = 20
+num_uids = 10
+timeout = 5

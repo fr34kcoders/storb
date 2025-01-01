@@ -1,17 +1,83 @@
+import threading
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator, AsyncIterable, Iterable, Mapping
+from functools import lru_cache
+from typing import Any, AsyncGenerator, Mapping
 
 import httpx
+from fastapi import FastAPI
 from fiber import Keypair, utils
 from fiber import constants as fcst
-from fiber.chain import signatures
+from fiber.chain import chain_utils, interface, signatures
+from fiber.chain.metagraph import Metagraph
 from fiber.logging_utils import get_logger
+from fiber.miner.core.configuration import Config, factory_config
+from fiber.miner.security import nonce_management
 from fiber.validator.generate_nonce import generate_nonce
 from pydantic import BaseModel
 
+from storb.config import Config as StorbConfig
 from storb.constants import QUERY_TIMEOUT
 
 logger = get_logger(__name__)
+
+
+@lru_cache
+def custom_config(config: StorbConfig) -> Config:
+    nonce_manager = nonce_management.NonceManager()
+
+    wallet_name = config.settings.wallet_name
+    hotkey_name = config.settings.hotkey_name
+    netuid = config.settings.netuid
+    subtensor_network = config.settings.subtensor.network
+    subtensor_address = config.settings.subtensor.address
+    load_old_nodes = True
+    # NOTE: This doesn't really have any effect on how the validator operates
+    min_stake_threshold = config.settings.min_stake_threshold
+
+    assert netuid is not None, "Must set NETUID env var please!"
+
+    substrate = interface.get_substrate(subtensor_network, subtensor_address)
+    metagraph = Metagraph(
+        substrate=substrate,
+        netuid=netuid,
+        load_old_nodes=load_old_nodes,
+    )
+
+    keypair = chain_utils.load_hotkey_keypair(wallet_name, hotkey_name)
+
+    return Config(
+        nonce_manager=nonce_manager,
+        keypair=keypair,
+        metagraph=metagraph,
+        min_stake_threshold=min_stake_threshold,
+        httpx_client=httpx.AsyncClient(),
+    )
+
+
+def factory_app(conf: StorbConfig, debug: bool = False) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        config = custom_config(conf)
+        metagraph = config.metagraph
+        sync_thread = None
+        if metagraph.substrate is not None:
+            sync_thread = threading.Thread(
+                target=metagraph.periodically_sync_nodes, daemon=True
+            )
+            sync_thread.start()
+
+        yield
+
+        logger.info("Shutting down...")
+
+        metagraph.shutdown()
+        if metagraph.substrate is not None and sync_thread is not None:
+            sync_thread.join()
+
+    app = FastAPI(lifespan=lifespan, debug=debug)
+
+    return app
 
 
 @dataclass

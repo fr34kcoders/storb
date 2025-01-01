@@ -3,21 +3,20 @@ import base64
 
 import httpx
 import uvicorn
-from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, File, Request, UploadFile
 from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
 from fiber.logging_utils import get_logger
 from fiber.miner.dependencies import blacklist_low_stake, verify_request
-from fiber.miner.server import factory_app
 
 from storb import protocol
+from storb.constants import NeuronType
 from storb.dht.piece_dht import PieceDHTValue
 from storb.neuron import Neuron
-from storb.util.config import MinerConfig
 from storb.util.middleware import LoggerMiddleware
 from storb.util.piece import piece_hash
+from storb.util.query import factory_app
 from storb.util.store import ObjectStore
 
 logger = get_logger(__name__)
@@ -25,18 +24,12 @@ logger = get_logger(__name__)
 
 class Miner(Neuron):
     def __init__(self):
-        super(Miner, self).__init__()
-
-        load_dotenv()
-
-        self.config = MinerConfig()
+        super(Miner, self).__init__(NeuronType.Miner)
 
         self.check_registration()
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
 
-        self.object_store = ObjectStore(store_dir=self.config.T.store_dir)
-
-        self.app: FastAPI = factory_app()
+        self.object_store = ObjectStore(store_dir=self.settings.store_dir)
 
         self.piece_count: int = 0
         self.request_count: int = 0
@@ -50,7 +43,7 @@ class Miner(Neuron):
 
         asyncio.create_task(self.sync_loop())
 
-        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.config.T.api_port)
+        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.settings.api_port)
         self.server = uvicorn.Server(config)
 
         try:
@@ -66,7 +59,7 @@ class Miner(Neuron):
     def app_init(self):
         """Initialise FastAPI routes and middleware"""
 
-        self.app = factory_app(debug=False)
+        self.app = factory_app(self.config, debug=False)
 
         self.app.add_middleware(LoggerMiddleware)
 

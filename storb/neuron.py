@@ -5,17 +5,16 @@ from abc import ABC, abstractmethod
 
 import httpx
 import uvicorn
-from dotenv import load_dotenv
 from fastapi import FastAPI
 from fiber.chain import chain_utils, interface, post_ip_to_chain
 from fiber.chain.metagraph import Metagraph
 from fiber.logging_utils import get_logger
 from substrateinterface.keypair import Keypair
 
-from storb import __spec_version__
-from storb.constants import DHT_PORT
+from storb import __spec_version__, get_spec_version
+from storb.config import Config
+from storb.constants import NeuronType
 from storb.dht.base_dht import DHT
-from storb.util.config import Config
 from storb.util.logging import setup_event_logger, setup_rotating_logger
 
 logger = get_logger(__name__)
@@ -27,11 +26,14 @@ SYNC_FREQUENCY = 60  # 1 minute
 class Neuron(ABC):
     """Base class for Bittensor neurons (miners and validators)"""
 
-    def __init__(self):
-        load_dotenv()
-
-        self.config = Config()
+    def __init__(self, neuron_type: NeuronType = NeuronType.Base):
+        self.config = Config(neuron_type)
+        self.settings = self.config.settings
         self.spec_version = __spec_version__
+
+        assert (
+            get_spec_version(self.settings.version) == self.spec_version
+        ), "The spec versions must match"
 
         # Miners and validators must set these themselves
         self.keypair: Keypair = None
@@ -39,27 +41,31 @@ class Neuron(ABC):
         self.app: FastAPI = None
         self.server: uvicorn.Server = None
         self.httpx_client: httpx.AsyncClient = None
-        self.api_port: int = self.config.T.api_port
+        self.api_port: int = self.settings.api_port
 
-        self.wallet_name = self.config.T.wallet_name
-        self.hotkey_name = self.config.T.hotkey_name
+        assert self.settings.wallet_name, "Wallet name is not defined"
+        assert self.settings.hotkey_name, "Hotkey name is not defined"
 
+        print(
+            "!!!!! attempt to load hotkey keypair with wallet name:",
+            self.settings.wallet_name,
+        )
         self.keypair = chain_utils.load_hotkey_keypair(
-            self.wallet_name, self.hotkey_name
+            self.settings.wallet_name, self.settings.hotkey_name
         )
 
-        self.netuid = self.config.T.netuid
-        self.external_ip = self.config.T.external_ip
+        self.netuid = self.settings.netuid
+        self.external_ip = self.settings.external_ip
 
-        self.subtensor_network = self.config.T.subtensor_network
-        self.subtensor_address = self.config.T.subtensor_address
+        self.subtensor_network = self.settings.subtensor.network
+        self.subtensor_address = self.settings.subtensor.address
 
         self.substrate = interface.get_substrate(
             subtensor_network=self.subtensor_network,
             subtensor_address=self.subtensor_address,
         )
 
-        if self.config.T.post_ip:
+        if self.settings.post_ip:
             post_ip_to_chain.post_node_ip_to_chain(
                 self.substrate,
                 self.keypair,
@@ -72,7 +78,7 @@ class Neuron(ABC):
         self.metagraph = Metagraph(netuid=self.netuid, substrate=self.substrate)
         self.metagraph.sync_nodes()
 
-        self.dht = DHT(self.config.T.dht_port)
+        self.dht = DHT(self.settings.dht.port)
 
         setup_rotating_logger(
             logger_name="kademlia", log_level=pylog.DEBUG, max_size=LOG_MAX_SIZE
@@ -89,8 +95,8 @@ class Neuron(ABC):
     async def start_dht(self):
         """Start the DHT server"""
 
-        dht_bootstrap_ip = self.config.T.dht_bootstrap_ip
-        dht_bootstrap_port = self.config.T.dht_bootstrap_port
+        dht_bootstrap_ip = self.settings.dht.bootstrap.ip
+        dht_bootstrap_port = self.settings.dht.bootstrap.port
 
         try:
             if dht_bootstrap_ip and dht_bootstrap_port:

@@ -272,6 +272,15 @@ wheels = [
 ]
 
 [[package]]
+name = "dynaconf"
+version = "3.2.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/1a/324f1bf234cc4f98445305fd8719245318466e310e05caea7ef052748ecd/dynaconf-3.2.6.tar.gz", hash = "sha256:74cc1897396380bb957730eb341cc0976ee9c38bbcb53d3307c50caed0aedfb8", size = 229209 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/14/c8a7d861262139688fa465d2e27ff7113764d6fa03b15b9c7b666729ea2e/dynaconf-3.2.6-py2.py3-none-any.whl", hash = "sha256:3911c740d717df4576ed55f616c7cbad6e06bc8ef23ffca444b6e2a12fb1c34c", size = 231063 },
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.19.0"
 source = { registry = "https://pypi.org/simple" }
@@ -872,13 +881,13 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "colorlog" },
     { name = "cryptography" },
+    { name = "dynaconf" },
     { name = "fastapi" },
     { name = "fiber" },
     { name = "httpx" },
     { name = "kademlia" },
     { name = "numpy" },
     { name = "pydantic" },
-    { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "rich" },
     { name = "starlette" },
@@ -901,13 +910,13 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20.0" },
     { name = "colorlog", specifier = ">=6.9.0" },
     { name = "cryptography", specifier = ">=44.0.0" },
+    { name = "dynaconf", specifier = ">=3.2.6" },
     { name = "fastapi", specifier = ">=0.112.0" },
     { name = "fiber", git = "https://github.com/fr34kcoders/fiber.git" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "kademlia", specifier = ">=2.2.2" },
     { name = "numpy", specifier = "==2.0.2" },
     { name = "pydantic", specifier = ">=2.9.2" },
-    { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "python-multipart", specifier = ">=0.0.19" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "starlette", specifier = "==0.37.2" },
