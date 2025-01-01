@@ -51,15 +51,7 @@ class DHT:
 
         asyncio.set_event_loop(self.loop)
         try:
-            # Check if a save file exists start server with load_state() else start server with listen()
-            if os.path.exists(DHT_SAVE_FILE):
-                self.loop.run_until_complete(
-                    self.server.load_state(DHT_SAVE_FILE, self.port)
-                )
-                bt.logging.info(f"Starting server with DHT state from {DHT_SAVE_FILE}")
-            else:
-                self.loop.run_until_complete(self.server.listen(self.port))
-                self.server.save_state_regularly(DHT_SAVE_FILE, 10)
+            self.loop.run_until_complete(self.server.listen(self.port))
         except Exception as e:
             bt.logging.error(f"Failed to start server on port {self.port}: {e}")
             raise RuntimeError(f"Server failed to start on port {self.port}") from e

@@ -74,21 +74,11 @@ class PersistentStorageDHT(IStorage):
         self.thread = threading.Thread(target=self._start_event_loop, daemon=True)
         self.thread.start()
 
-        # Synchronously ensure DB is ready
-        self._setup_db()
-        bt.logging.info(f"Connected to SQLite database at {self.db_path}")
-
     def _start_event_loop(self):
         """Start the event loop for the DB."""
 
         asyncio.set_event_loop(self.loop)
         self.loop.run_forever()
-
-    def _setup_db(self):
-        """Set up the database in the event loop thread."""
-
-        future = asyncio.run_coroutine_threadsafe(self._async_setup_db(), self.loop)
-        future.result()
 
     def set(self, key: bytes, value: bytes):
         """Store a value in the DHT.
@@ -187,7 +177,7 @@ class PersistentStorageDHT(IStorage):
                 results.append((k, v))
         return results
 
-    def __iter__(self) -> Generator[tuple[bytes, DHTValue]]:
+    def __iter__(self):
         """Iterate over the keys and values in the DHT.
 
         Yields:
@@ -230,8 +220,7 @@ class PersistentStorageDHT(IStorage):
                 case "chunk":
                     val = ChunkDHTValue.model_validate_json(value)
                     entry = db.ChunkEntry(
-                        entry_key=key,
-                        chunk_hash=val.chunk_hash,
+                        chunk_hash=key,
                         validator_id=val.validator_id,
                         piece_hashes=val.piece_hashes,
                         chunk_idx=val.chunk_idx,
@@ -248,8 +237,7 @@ class PersistentStorageDHT(IStorage):
                 case "piece":
                     val = PieceDHTValue.model_validate_json(value)
                     entry = db.PieceEntry(
-                        entry_key=key,
-                        piece_hash=val.piece_hash,
+                        piece_hash=key,
                         miner_id=val.miner_id,
                         chunk_idx=val.chunk_idx,
                         piece_idx=val.piece_idx,
@@ -262,8 +250,7 @@ class PersistentStorageDHT(IStorage):
                 case "tracker":
                     val = TrackerDHTValue.model_validate_json(value)
                     entry = db.TrackerEntry(
-                        entry_key=key,
-                        infohash=val.infohash,
+                        infohash=key,
                         validator_id=val.validator_id,
                         filename=val.filename,
                         length=val.length,
@@ -298,7 +285,7 @@ class PersistentStorageDHT(IStorage):
             If the key format is invalid.
         """
 
-        bt.logging.debug(f"DISK read for {key}")
+        bt.logging.debug(f"Trying read for {key} from disk")
         try:
             namespace, db_key = parse_store_key(key)
         except ValueError:

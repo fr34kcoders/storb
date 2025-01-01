@@ -68,6 +68,13 @@ from storage_subnet.utils.logging import (
     setup_event_logger,
     setup_rotating_logger,
 )
+from storage_subnet.utils.message_signing import (
+    ChunkMessage,
+    PieceMessage,
+    TrackerMessage,
+    sign_message,
+    verify_message,
+)
 from storage_subnet.utils.piece import (
     EncodedChunk,
     Piece,
@@ -104,6 +111,12 @@ class Validator(BaseValidatorNeuron):
             max_size=5 * 1024 * 1024,  # 5 MiB
         )
 
+        setup_rotating_logger(
+            logger_name="rpcudp",
+            log_level=logging.DEBUG,
+            max_size=5 * 1024 * 1024,  # 5 MiB
+        )
+
         setup_event_logger(
             retention_size=5 * 1024 * 1024  # 5 MiB
         )
@@ -113,49 +126,6 @@ class Validator(BaseValidatorNeuron):
 
     async def get_metadata(self, synapse: MetadataSynapse) -> MetadataResponse:
         return obtain_metadata_dht(synapse.infohash)
-
-    async def sign_message(self, message: str) -> str:
-        """Sign a message with the hotkey.
-
-        Parameters
-        ----------
-        message : str
-            The message to sign.
-
-        Returns
-        -------
-        signature : str
-            The signature of the message.
-        """
-
-        keypair = self.wallet.hotkey
-        return keypair.sign(message)
-
-    def verify_message(self, message: str, signature: str, signer: int) -> bool:
-        """Verify the signature of a message.
-
-        Parameters
-        ----------
-        message : str
-            The message to verify.
-        signature : str
-            The signature to verify.
-        signer : int
-           signer uid
-
-        Returns
-        --------
-        bool
-            True if the signature is valid, False otherwise.
-        """
-
-        assert self.metagraph is not None
-        assert signer < len(self.metagraph.hotkeys)
-
-        signer_hotkey = self.metagraph.hotkeys[signer]
-        keypair = Keypair(ss58_address=signer_hotkey, ss58_format=42)
-        bt.logging.debug(f"Verifying message: {message}")
-        return keypair.verify(message, signature)
 
     async def get_miners_for_file(self, synapse: GetMiners) -> GetMiners:
         """
@@ -178,7 +148,7 @@ class Validator(BaseValidatorNeuron):
         if tracker_data is None:
             raise HTTPException(
                 status_code=HTTP_404_NOT_FOUND,
-                detail="No chunks found for the given infohash",
+                detail="No tracker entry found for the given infohash",
             )
 
         chunk_ids = tracker_data.chunk_hashes
@@ -192,8 +162,12 @@ class Validator(BaseValidatorNeuron):
             )
 
         for chunk_id in chunk_ids:
-            piece_ids = None
             chunks_metadata = await self.dht.get_chunk_entry(chunk_id)
+            if chunks_metadata is None:
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to get chunk for chunk_id {chunk_id}",
+                )
             chunks_metadatas.append(chunks_metadata)
             piece_ids = chunks_metadata.piece_hashes
             pieces_metadata: list[PieceDHTValue] = []
@@ -203,17 +177,18 @@ class Validator(BaseValidatorNeuron):
                     piece = await self.dht.get_piece_entry(piece_id)
                     try:
                         signature = piece.signature
-                        signature = unhexlify(signature.encode())
                         # create message object excluding the signature
-                        message = {
-                            "miner_id": piece.miner_id,
-                            "chunk_idx": piece.chunk_idx,
-                            "piece_idx": piece.piece_idx,
-                            "piece_type": piece.piece_type,
-                        }
+                        message = PieceMessage(
+                            piece_hash=piece_id,
+                            miner_id=piece.miner_id,
+                            chunk_idx=piece.chunk_idx,
+                            piece_idx=piece.piece_idx,
+                            piece_type=piece.piece_type,
+                        )
+
                         # verify the signature
-                        if not core_validator.verify_message(
-                            message, signature, piece.miner_id
+                        if not verify_message(
+                            self.metagraph, message, signature, piece.miner_id
                         ):
                             raise HTTPException(
                                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
@@ -221,8 +196,10 @@ class Validator(BaseValidatorNeuron):
                             )
                     except Exception as e:
                         bt.logging.error(e)
-                        piece = None
-
+                        raise HTTPException(
+                            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Signature verification failed: {e}",
+                        )
                     pieces_metadata.append(piece)
                 except Exception as e:
                     bt.logging.error(
@@ -379,20 +356,20 @@ async def obtain_metadata_dht(infohash: str, request: Request) -> MetadataRespon
         tracker_value = await core_validator.dht.get_tracker_entry(infohash)
         try:
             signature = tracker_value.signature
-            signature = unhexlify(signature.encode())
             # create message object excluding the signature
-            message = {
-                "validator_id": tracker_value.validator_id,
-                "filename": tracker_value.filename,
-                "length": tracker_value.length,
-                "chunk_length": tracker_value.chunk_length,
-                "chunk_count": tracker_value.chunk_count,
-                "chunk_hashes": tracker_value.chunk_hashes,
-                "creation_timestamp": tracker_value.creation_timestamp,
-            }
+            message = TrackerMessage(
+                infohash=infohash,
+                validator_id=tracker_value.validator_id,
+                filename=tracker_value.filename,
+                length=tracker_value.length,
+                chunk_length=tracker_value.chunk_length,
+                chunk_count=tracker_value.chunk_count,
+                chunk_hashes=tracker_value.chunk_hashes,
+                creation_timestamp=tracker_value.creation_timestamp,
+            )
             # verify the signature
-            if not core_validator.verify_message(
-                message, signature, tracker_value.validator_id
+            if not verify_message(
+                core_validator.metagraph, message, signature, tracker_value.validator_id
             ):
                 raise HTTPException(
                     status_code=HTTP_500_INTERNAL_SERVER_ERROR,
@@ -587,9 +564,23 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
             }
             chunk_hash = hashlib.sha1(json.dumps(data).encode("utf-8")).hexdigest()
             data["chunk_hash"] = chunk_hash
+
+            message = ChunkMessage(
+                chunk_hash=chunk_hash,
+                validator_id=validator_id,
+                piece_hashes=sent_piece_hashes,
+                chunk_idx=chunk_info.chunk_idx,
+                k=chunk_info.k,
+                m=chunk_info.m,
+                chunk_size=chunk_info.chunk_size,
+                padlen=chunk_info.padlen,
+                original_chunk_size=chunk_info.original_chunk_size,
+            )
+
             try:
-                signature = await core_validator.sign_message(
-                    json.dumps(data).encode("utf-8")
+                signature = sign_message(
+                    message=message,
+                    wallet=core_validator.wallet,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -609,7 +600,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                     chunk_size=chunk_info.chunk_size,
                     padlen=chunk_info.padlen,
                     original_chunk_size=chunk_info.original_chunk_size,
-                    signature=signature.hex(),
+                    signature=signature,
                 ),
             )
             chunk_hashes.append(chunk_hash)
@@ -623,19 +614,21 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
         # Put piece hashes in a set
         piece_hash_set = set(piece_hashes)
         bt.logging.debug(f"Generated pieces: {len(piece_hash_set)}")
-        data = {
-            "validator_id": validator_id,
-            "filename": filename,
-            "length": filesize,
-            "chunk_length": chunk_size,
-            "chunk_count": len(chunk_hashes),
-            "chunk_hashes": chunk_hashes,
-            "creation_timestamp": timestamp,
-        }
+        message = TrackerMessage(
+            infohash=infohash,
+            validator_id=validator_id,
+            filename=filename,
+            length=filesize,
+            chunk_length=piece_size,
+            chunk_count=len(chunk_hashes),
+            chunk_hashes=chunk_hashes,
+            creation_timestamp=timestamp,
+        )
 
         try:
-            signature = await core_validator.sign_message(
-                json.dumps(data).encode("utf-8")
+            signature = sign_message(
+                message=message,
+                wallet=core_validator.wallet,
             )
         except Exception as e:
             raise HTTPException(
@@ -655,7 +648,7 @@ async def upload_file(file: UploadFile, req: Request) -> StoreResponse:
                 chunk_count=len(chunk_hashes),
                 chunk_hashes=chunk_hashes,
                 creation_timestamp=timestamp,
-                signature=signature.hex(),
+                signature=signature,
             ),
         )
 
@@ -690,20 +683,21 @@ async def retrieve_file(infohash: str):
                 detail="Tracker entry not found.",
             )
         signature = tracker_value.signature
-        signature = unhexlify(signature.encode())
         # create message object excluding the signature
-        message = {
-            "validator_id": tracker_value.validator_id,
-            "filename": tracker_value.filename,
-            "length": tracker_value.length,
-            "chunk_length": tracker_value.chunk_length,
-            "chunk_count": tracker_value.chunk_count,
-            "chunk_hashes": tracker_value.chunk_hashes,
-            "creation_timestamp": tracker_value.creation_timestamp,
-        }
+        message = TrackerMessage(
+            infohash=infohash,
+            validator_id=tracker_value.validator_id,
+            filename=tracker_value.filename,
+            length=tracker_value.length,
+            chunk_length=tracker_value.chunk_length,
+            chunk_count=tracker_value.chunk_count,
+            chunk_hashes=tracker_value.chunk_hashes,
+            creation_timestamp=tracker_value.creation_timestamp,
+        )
+
         # verify the signature
-        if not core_validator.verify_message(
-            message, signature, tracker_value.validator_id
+        if not verify_message(
+            core_validator.metagraph, message, signature, tracker_value.validator_id
         ):
             raise HTTPException(
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
@@ -711,8 +705,10 @@ async def retrieve_file(infohash: str):
             )
     except Exception as e:
         bt.logging.error(e)
-        tracker_value = None
-
+        raise HTTPException(
+            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get tracker entry.",
+        )
     validator_to_ask = tracker_value.validator_id
 
     # get the uids of the miners(s) that stores each respective piece by asking the validator
@@ -795,17 +791,17 @@ async def retrieve_file(infohash: str):
             piece_meta = await core_validator.dht.get_piece_entry(piece_id)
             try:
                 signature = piece_meta.signature
-                signature = unhexlify(signature.encode())
                 # create message object excluding the signature
-                message = {
-                    "miner_id": piece_meta.miner_id,
-                    "chunk_idx": piece_meta.chunk_idx,
-                    "piece_idx": piece_meta.piece_idx,
-                    "piece_type": piece_meta.piece_type,
-                }
+                message = PieceMessage(
+                    piece_hash=piece_id,
+                    miner_id=piece_meta.miner_id,
+                    chunk_idx=piece_meta.chunk_idx,
+                    piece_idx=piece_meta.piece_idx,
+                    piece_type=piece_meta.piece_type,
+                )
                 # verify the signature
-                if not core_validator.verify_message(
-                    message, signature, piece_meta.miner_id
+                if not verify_message(
+                    core_validator.metagraph, message, signature, piece_meta.miner_id
                 ):
                     raise HTTPException(
                         status_code=HTTP_500_INTERNAL_SERVER_ERROR,

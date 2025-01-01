@@ -37,6 +37,7 @@ from storage_subnet.constants import (
 from storage_subnet.dht.base_dht import DHT
 from storage_subnet.dht.piece_dht import PieceDHTValue
 from storage_subnet.utils.logging import setup_event_logger, setup_rotating_logger
+from storage_subnet.utils.message_signing import PieceMessage, sign_message
 from storage_subnet.utils.piece import piece_hash
 from storage_subnet.utils.store import ObjectStore
 
@@ -62,6 +63,12 @@ class Miner(BaseMinerNeuron):
         self.dht = DHT(dht_port)
         setup_rotating_logger(
             logger_name="kademlia",
+            log_level=pylog.DEBUG,
+            max_size=5 * 1024 * 1024,  # 5 MiB
+        )
+
+        setup_rotating_logger(
+            logger_name="rpcudp",
             log_level=pylog.DEBUG,
             max_size=5 * 1024 * 1024,  # 5 MiB
         )
@@ -117,16 +124,20 @@ class Miner(BaseMinerNeuron):
         bt.logging.debug(
             f"ptype: {synapse.piece_type} | piece preview: {decoded_piece[:10]} | hash: {piece_id}"
         )
-        data = {
-            "miner_id": self.uid,
-            "chunk_idx": synapse.chunk_idx,
-            "piece_idx": synapse.piece_idx,
-            "piece_type": synapse.piece_type,
-        }
-        # sign piece values
-        keypair = self.wallet.hotkey
-        signature = keypair.sign(json.dumps(data).encode("utf-8"))
-        encoded_singature = binascii.hexlify(signature).decode("utf-8")
+
+        message = PieceMessage(
+            piece_hash=piece_id,
+            miner_id=self.uid,
+            chunk_idx=synapse.chunk_idx,
+            piece_idx=synapse.piece_idx,
+            piece_type=synapse.piece_type,
+        )
+
+        try:
+            signature = sign_message(message, self.wallet)
+        except Exception as e:
+            bt.logging.error(f"Failed to sign message: {e}")
+            raise RuntimeError("Failed to sign message") from e
 
         await self.object_store.write(piece_id, decoded_piece)
         await self.dht.store_piece_entry(
@@ -137,7 +148,7 @@ class Miner(BaseMinerNeuron):
                 chunk_idx=synapse.chunk_idx,
                 piece_idx=synapse.piece_idx,
                 piece_type=synapse.piece_type,
-                signature=encoded_singature,
+                signature=signature,
             ),
         )
         self.piece_count += 1

@@ -171,7 +171,7 @@ async def set_tracker_entry(conn: aiosqlite.Connection, entry: TrackerEntry):
 async def get_tracker_entry(conn: aiosqlite.Connection, infohash: str):
     query = """
     SELECT * FROM tracker
-    WHERE entry_key = ?
+    WHERE infohash = ?
     """
     async with conn.execute(query, (infohash,)) as cursor:
         row = await cursor.fetchone()
