@@ -78,10 +78,23 @@ class Validator(Neuron):
 
         self.scores = np.zeros(len(self.metagraph.nodes), dtype=np.float32)
         self.scores_lock = threading.Lock()
-        self.latencies = np.full(
+
+        self.store_latencies = np.full(
             len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
         )
-        self.latency_scores = np.zeros(len(self.metagraph.nodes), dtype=np.float32)
+        self.retrieve_latencies = np.full(
+            len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
+        )
+
+        self.store_latency_scores = np.zeros(
+            len(self.metagraph.nodes), dtype=np.float32
+        )
+        self.retrieve_latency_scores = np.zeros(
+            len(self.metagraph.nodes), dtype=np.float32
+        )
+        self.final_latency_scores = np.zeros(
+            len(self.metagraph.nodes), dtype=np.float32
+        )
 
         logger.info("load_state()")
         self.load_state()
@@ -208,6 +221,9 @@ class Validator(Neuron):
                 subtensor_address=self.substrate.url
             )
             previous_metagraph_nodes = copy.deepcopy(self.metagraph.nodes)
+
+            # TODO: are the nodes in order by ascending uid?
+            old_hotkeys = list(self.metagraph.nodes.keys())
             self.metagraph.sync_nodes()
             logger.info("Metagraph synced successfully")
             # Check if the metagraph axon info has changed.
@@ -216,44 +232,88 @@ class Validator(Neuron):
 
             logger.info("Metagraph updated, re-syncing hotkeys and moving averages")
 
+            new_hotkeys = list(self.metagraph.nodes.keys())
+
             with self.scores_lock:
-                old_hotkeys = list(self.metagraph.nodes.keys())
                 for uid, hotkey in enumerate(old_hotkeys):
-                    if hotkey != self.metagraph.hotkeys[uid]:
+                    if hotkey != new_hotkeys[uid]:
                         self.scores[uid] = 0  # hotkey has been replaced
 
                 # Check to see if the metagraph has changed size.
                 # If so, we need to add new hotkeys and moving averages.
-                if len(old_hotkeys) < len(self.metagraph.hotkeys):
-                    logger.debug(
+                if len(old_hotkeys) < len(new_hotkeys):
+                    logger.info(
                         "New uid added to subnet, updating length of scores arrays"
                     )
                     # Update the size of the moving average scores.
                     new_moving_average = np.zeros((len(self.metagraph.nodes)))
-                    new_latencies = np.full(
+                    new_store_latencies = np.full(
                         len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
                     )
-                    new_latency_scores = np.zeros((len(self.metagraph.nodes)))
+                    new_ret_latencies = np.full(
+                        len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
+                    )
+                    new_store_latency_scores = np.zeros((len(self.metagraph.nodes)))
+                    new_ret_latency_scores = np.zeros((len(self.metagraph.nodes)))
+                    new_final_latency_scores = np.zeros((len(self.metagraph.nodes)))
                     min_len = min(len(old_hotkeys), len(self.scores))
-                    len_latencies = min(len(old_hotkeys), len(self.latencies))
-                    len_latency_scores = min(len(old_hotkeys), len(self.latency_scores))
+
+                    len_store_latencies = min(
+                        len(old_hotkeys), len(self.store_latencies)
+                    )
+                    len_ret_latencies = min(
+                        len(old_hotkeys), len(self.retrieve_latencies)
+                    )
+                    len_store_latency_scores = min(
+                        len(old_hotkeys), len(self.store_latency_scores)
+                    )
+                    len_ret_latency_scores = min(
+                        len(old_hotkeys), len(self.retrieve_latency_scores)
+                    )
+                    len_final_latency_scores = min(
+                        len(old_hotkeys), len(self.final_latency_scores)
+                    )
 
                     new_moving_average[:min_len] = self.scores[:min_len]
-                    new_latencies[:len_latencies] = self.latencies[:len_latencies]
-                    new_latency_scores[:len_latency_scores] = self.latency_scores[
-                        :len_latency_scores
+                    new_store_latencies[:len_store_latencies] = self.store_latencies[
+                        :len_store_latencies
                     ]
+                    new_ret_latencies[:len_ret_latencies] = self.ret_latencies[
+                        :len_ret_latencies
+                    ]
+                    new_store_latency_scores[:len_store_latency_scores] = (
+                        self.store_latency_scores[:len_store_latency_scores]
+                    )
+                    new_ret_latency_scores[:len_ret_latency_scores] = (
+                        self.retrieve_latency_scores[:len_ret_latency_scores]
+                    )
+                    new_final_latency_scores[:len_final_latency_scores] = (
+                        self.final_latency_scores[:len_final_latency_scores]
+                    )
 
                     self.scores = new_moving_average
 
-                    self.latencies = new_latencies
-                    self.latency_scores = new_latency_scores
-                    logger.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
-                    logger.debug(
-                        f"(len: {len(self.latencies)}) New latencies: {self.latencies}"
+                    self.store_latencies = new_store_latencies
+                    self.retrieve_latencies = new_ret_latency_scores
+                    self.store_latency_scores = new_store_latency_scores
+                    self.ret_latency_scores = new_ret_latency_scores
+                    self.final_latency_scores = new_final_latency_scores
+                    # TODO: use debug for these
+                    logger.info(f"(len: {len(self.scores)}) New scores: {self.scores}")
+                    logger.info(
+                        f"(len: {len(self.store_latencies)}) New store latencies: {self.store_latencies}"
                     )
-                    logger.debug(
-                        f"(len: {len(self.latency_scores)}) New latency scores: {self.latency_scores}"
+                    logger.info(
+                        f"(len: {len(self.retrieve_latencies)}) New retrieve latencies: {self.retrieve_latencies}"
+                    )
+                    logger.info(
+                        f"(len: {len(self.store_latency_scores)}) New store latency scores: {self.store_latency_scores}"
+                    )
+                    logger.info(
+                        f"(len: {len(self.retrieve_latency_scores)}) New retrieve latency scores: {self.retrieve_latency_scores}"
+                    )
+                    logger.info(
+                        f"(len: {len(self.final_latency_scores)}) New latency scores: {self.final_latency_scores}"
                     )
 
         except Exception as e:
@@ -303,7 +363,9 @@ class Validator(Neuron):
             # Update scores with rewards produced by this step.
             # shape: [ metagraph.n ]
             alpha: float = self.settings.neuron.moving_average_alpha
-            self.scores: np.ndarray = alpha * scattered_rewards + (1 - alpha) * self.scores
+            self.scores: np.ndarray = (
+                alpha * scattered_rewards + (1 - alpha) * self.scores
+            )
             logger.info(f"Updated moving avg scores: {self.scores}")
 
     def set_weights(self):
@@ -487,36 +549,72 @@ class Validator(Neuron):
             self, miner_stats
         )
 
-        if len(self.latency_scores) < len(response_rate_scores) or len(
-            self.latencies
-        ) < len(response_rate_scores):
+        if (
+            len(self.store_latencies) < len(response_rate_scores)
+            or len(self.retrieve_latencies) < len(response_rate_scores)
+            or len(self.store_latencies) < len(response_rate_scores)
+            or len(self.retrieve_latencies) < len(response_rate_scores)
+        ):
             new_len = len(response_rate_scores)
-            new_latencies = np.full(new_len, QUERY_TIMEOUT, dtype=np.float32)
-            new_latency_scores = np.zeros(new_len)
+            new_store_latencies = np.full(new_len, QUERY_TIMEOUT, dtype=np.float32)
+            new_ret_latencies = np.full(new_len, QUERY_TIMEOUT, dtype=np.float32)
+            new_store_latency_scores = np.zeros(new_len)
+            new_ret_latency_scores = np.zeros(new_len)
+            new_final_latency_scores = np.zeros(new_len)
             new_scores = np.zeros(new_len)
 
-            len_lat = len(self.latencies)
-            len_lat_scores = len(self.latency_scores)
+            len_lat = len(self.store_latencies)
+            len_lat_scores = len(self.store_latency_scores)
 
             with self.scores_lock:
                 len_scores = len(self.scores)
 
-                new_latencies[:len_lat] = self.latencies[:len_lat]
-                new_latency_scores[:len_lat_scores] = self.latency_scores[:len_lat_scores]
+                new_store_latencies[:len_lat] = self.store_latencies[:len_lat]
+                new_ret_latencies[:len_lat] = self.retrieve_latencies[:len_lat]
+                new_store_latency_scores[:len_lat_scores] = self.store_latency_scores[
+                    :len_lat_scores
+                ]
+                new_ret_latency_scores[:len_lat_scores] = self.retrieve_latency_scores[
+                    :len_lat_scores
+                ]
+                new_final_latency_scores[:len_lat_scores] = self.final_latency_scores[
+                    :len_lat_scores
+                ]
                 new_scores[:len_scores] = self.scores[:len_scores]
 
-                self.latencies = new_latencies
-                self.latency_scores = new_latency_scores
+                self.store_latencies = new_store_latencies
+                self.retrieve_latencies = new_ret_latencies
+                self.store_latency_scores = np.nan_to_num(
+                    new_store_latency_scores, nan=0.0
+                )
+                self.retrieve_latency_scores = np.nan_to_num(
+                    new_ret_latency_scores, nan=0.0
+                )
+                self.final_latency_scores = np.nan_to_num(
+                    new_final_latency_scores, nan=0.0
+                )
 
                 self.scores = new_scores
 
-        logger.info(f"response rate scores: {response_rate_scores}")
-        logger.info(f"moving avg. latencies: {self.latencies}")
-        logger.info(f"moving avg. latency scores: {self.latency_scores}")
+        latency_scores = (
+            0.5 * self.store_latency_scores + 0.5 * self.retrieve_latency_scores
+        )
+        self.final_latency_scores = latency_scores / (
+            latency_scores.max() if latency_scores.max() != 0 else 1
+        )
 
         # TODO: this should also take the "pdp challenge score" into account
-        # TODO: this is a little cooked ngl - will see if it is OK to go without indexing
-        rewards = 0.2 * self.latency_scores + 0.3 * response_rate_scores
+        rewards = 0.2 * self.final_latency_scores + 0.3 * response_rate_scores
+
+        logger.info(f"response rate scores: {response_rate_scores}")
+        logger.info(f"moving avg. store latencies: {self.store_latencies}")
+        logger.info(f"moving avg. retrieve latencies: {self.retrieve_latencies}")
+        logger.info(f"moving avg. store latency scores: {self.store_latency_scores}")
+        logger.info(
+            f"moving avg. retrieve latency scores: {self.retrieve_latency_scores}"
+        )
+        logger.info(f"moving avg. latency scores: {self.final_latency_scores}")
+
         self.update_scores(rewards, response_rate_uids)
 
         await asyncio.sleep(5)
@@ -697,6 +795,8 @@ class Validator(Neuron):
 
         uids = []
 
+        latencies = np.full(len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32)
+
         for hotkey in hotkeys:
             uids.append(self.metagraph.nodes[hotkey].node_id)
 
@@ -722,6 +822,9 @@ class Validator(Neuron):
                     # Verify piece hash
                     true_hash = piece_hashes[piece_idx]
                     if response.piece_id == true_hash:
+                        latencies[uid] = recv_payload.time_elapsed / len(
+                            pieces[piece_idx].data
+                        )
                         miner_stats[uid]["store_successes"] += 1
                         miner_stats[uid]["total_successes"] += 1
                         logger.debug(f"Miner {uid} successfully stored {true_hash}")
@@ -778,6 +881,12 @@ class Validator(Neuron):
             await handle_batch_requests()
 
         logger.debug(f"Processed {len(piece_hashes)} pieces.")
+
+        alpha: float = self.settings.neuron.response_time_alpha
+        self.store_latencies = (alpha * latencies) + (1 - alpha) * self.store_latencies
+        self.store_latency_scores = 1 - (
+            self.retrieve_latencies / self.store_latencies.max()
+        )
 
         # update miner stats table in db
         async with db.get_db_connection(self.db_dir) as conn:
@@ -1144,7 +1253,7 @@ class Validator(Neuron):
             else:
                 miner_stats[miner_uid]["retrieval_successes"] += 1
                 miner_stats[miner_uid]["total_successes"] += 1
-                latencies[miner_uid] = recv_payload.time_elapsed
+                latencies[miner_uid] = recv_payload.time_elapsed / len(piece)
 
             piece = Piece(
                 chunk_idx=piece_meta.chunk_idx,
@@ -1175,8 +1284,12 @@ class Validator(Neuron):
 
         # we use the ema here so that the latency score changes aren't so sudden
         alpha: float = self.settings.neuron.response_time_alpha
-        self.latencies = (alpha * latencies) + (1 - alpha) * self.latencies
-        self.latency_scores = self.latencies / self.latencies.max()
+        self.retrieve_latencies = (alpha * latencies) + (
+            1 - alpha
+        ) * self.retrieve_latencies
+        self.retrieve_latency_scores = 1 - (
+            self.retrieve_latencies / self.retrieve_latencies.max()
+        )
 
         # We'll pass them to the streaming generator function:
         def file_generator():
@@ -1201,8 +1314,11 @@ class Validator(Neuron):
                 self.settings.full_path / "state.npz",
                 scores=self.scores,
                 hotkeys=list(self.metagraph.nodes.keys()),
-                latencies=self.latencies,
-                latency_scores=self.latency_scores,
+                store_latencies=self.store_latencies,
+                retrieve_latencies=self.retrieve_latencies,
+                store_latency_scores=self.store_latency_scores,
+                retrieve_latency_scores=self.retrieve_latency_scores,
+                final_latency_scores=self.final_latency_scores,
             )
 
     def load_state(self):
@@ -1219,5 +1335,16 @@ class Validator(Neuron):
         with self.scores_lock:
             self.scores = state["scores"]
         self.hotkeys = state["hotkeys"]
-        self.latencies = state.get("latencies", self.latencies)
-        self.latency_scores = state.get("latency_scores", self.latency_scores)
+        self.store_latencies = state.get("store_latencies", self.store_latencies)
+        self.retrieve_latencies = state.get(
+            "retrieve_latencies", self.retrieve_latencies
+        )
+        self.store_latency_scores = state.get(
+            "store_latency_scores", self.store_latency_scores
+        )
+        self.retrieve_latency_scores = state.get(
+            "retrieve_latency_scores", self.retrieve_latency_scores
+        )
+        self.final_latency_scores = state.get(
+            "final_latency_scores", self.final_latency_scores
+        )
