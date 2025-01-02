@@ -41,7 +41,7 @@ class Miner(Neuron):
         self.app_init()
         await self.start_dht()
 
-        asyncio.create_task(self.sync_loop())
+        # asyncio.create_task(self.run())
 
         config = uvicorn.Config(self.app, host="0.0.0.0", port=self.settings.api_port)
         self.server = uvicorn.Server(config)

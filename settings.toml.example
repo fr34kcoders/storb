@@ -21,6 +21,7 @@ address = "wss://entrypoint-finney.opentensor.ai:443"
 epoch_length = 100
 events_retention_size = 2147483648 # 2 GiB
 dont_save_events = false
+sync_frequency = 5
 
 [dht]
 port = 6942

@@ -3,6 +3,7 @@ Configuration options for Storb
 """
 
 from argparse import ArgumentParser
+import os
 
 from dynaconf import Dynaconf
 
@@ -23,20 +24,41 @@ class Config:
 
         # Add arguments
         self.add_args()
+        neuron_name = "base"
         match neuron_type:
             case NeuronType.Base:
                 pass
             case NeuronType.Miner:
                 self.add_miner_args()
+                neuron_name = "miner"
             case NeuronType.Validator:
                 self.add_validator_args()
+                neuron_name = "validator"
             case _:
                 raise ValueError(
                     f"The provided neuron_type ({self.settings.neuron_type}) is not valid."
                 )
 
         options = self._parser.parse_args()
+        self.add_full_path(options, neuron_name)
         self.settings.update(vars(options))
+
+    @classmethod
+    def add_full_path(cls, options, neuron_name: str):
+        r"""Checks/validates the config namespace object."""
+        full_path = os.path.expanduser(
+            "{}/{}/{}/netuid{}/{}".format(
+                "~/.bittensor/neurons",  # TODO: change from ~/.bittensor/miners to ~/.bittensor/neurons
+                options.wallet_name,
+                options.hotkey_name,
+                options.netuid,
+                neuron_name,
+            )
+        )
+        print("full path:", full_path)
+        options.full_path = os.path.expanduser(full_path)
+        if not os.path.exists(options.full_path):
+            os.makedirs(options.full_path, exist_ok=True)
 
     def add_args(self):
         self._parser.add_argument(
@@ -111,6 +133,13 @@ class Config:
             type=int,
             help="Minimum stake threshold",
             default=self.settings.min_stake_threshold,
+        )
+
+        self._parser.add_argument(
+            "--neuron.sync_frequency",
+            type=int,
+            help="The default sync frequency",
+            default=self.settings.neuron.sync_frequency,
         )
 
         self._parser.add_argument(

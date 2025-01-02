@@ -20,7 +20,6 @@ from storb.util.logging import setup_event_logger, setup_rotating_logger
 logger = get_logger(__name__)
 
 LOG_MAX_SIZE = 5 * 1024 * 1024  # 5 MiB
-SYNC_FREQUENCY = 60  # 1 minute
 
 
 class Neuron(ABC):
@@ -144,13 +143,13 @@ class Neuron(ABC):
         except Exception as e:
             logger.error(f"Failed to sync metagraph: {str(e)}")
 
-    async def sync_loop(self):
+    async def run(self):
         """Background task to sync metagraph"""
 
         while True:
             try:
                 await self.sync_metagraph()
-                await asyncio.sleep(SYNC_FREQUENCY)
+                await asyncio.sleep(self.settings.neuron.epoch_length)
             except Exception as e:
                 logger.error(f"Error in sync metagraph: {e}")
-                await asyncio.sleep(SYNC_FREQUENCY // 2)
+                await asyncio.sleep(self.settings.neuron.epoch_length // 2)

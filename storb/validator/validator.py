@@ -3,6 +3,7 @@ import base64
 import copy
 import hashlib
 import sys
+import threading
 import time
 import typing
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ import uvicorn
 import uvicorn.config
 from fastapi import Body, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
+from fiber.chain import interface
 from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
@@ -36,7 +38,7 @@ from storb.constants import (
 )
 from storb.dht.piece_dht import ChunkDHTValue, PieceDHTValue
 from storb.dht.tracker_dht import TrackerDHTValue
-from storb.neuron import SYNC_FREQUENCY, Neuron
+from storb.neuron import Neuron
 from storb.util.infohash import generate_infohash
 from storb.util.middleware import FileSizeMiddleware, LoggerMiddleware
 from storb.util.piece import (
@@ -74,17 +76,25 @@ class Validator(Neuron):
 
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
         self.symmetric_keys: dict[int, tuple[str, str]] = {}
+
+        self.scores = np.zeros(len(self.metagraph.nodes), dtype=np.float32)
         self.latencies = np.full(
             len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
         )
         self.latency_scores = np.zeros(len(self.metagraph.nodes), dtype=np.float32)
+
+        logger.info("load_state()")
+        self.load_state()
+
+        self.loop = asyncio.get_event_loop()
 
     async def start(self):
         self.httpx_client = httpx.AsyncClient()
         self.app_init()
         await self.start_dht()
 
-        asyncio.create_task(self.sync_loop())
+        # asyncio.create_task(self.run())
+        self.run_in_background_thread()
 
         config = uvicorn.Config(
             self.app,
@@ -183,18 +193,150 @@ class Validator(Neuron):
 
         logger.info("✅ Hands have been shaken!")
 
+    def sync_metagraph(self):
+        """Synchronize local metagraph state with chain.
+
+        Creates new metagraph instance if needed and syncs node data.
+
+        Raises
+        ------
+        Exception
+            If metagraph sync fails
+        """
+
+        try:
+            self.substrate = interface.get_substrate(
+                subtensor_address=self.substrate.url
+            )
+            previous_metagraph_nodes = copy.deepcopy(self.metagraph.nodes)
+            self.metagraph.sync_nodes()
+            logger.info("Metagraph synced successfully")
+            # Check if the metagraph axon info has changed.
+            if previous_metagraph_nodes == self.metagraph.nodes:
+                return
+
+            logger.info("Metagraph updated, re-syncing hotkeys and moving averages")
+
+            old_hotkeys = list(self.metagraph.nodes.keys())
+            for uid, hotkey in enumerate(old_hotkeys):
+                if hotkey != self.metagraph.hotkeys[uid]:
+                    self.scores[uid] = 0  # hotkey has been replaced
+
+            # Check to see if the metagraph has changed size.
+            # If so, we need to add new hotkeys and moving averages.
+            if len(old_hotkeys) < len(self.metagraph.hotkeys):
+                logger.debug(
+                    "New uid added to subnet, updating length of scores arrays"
+                )
+                # Update the size of the moving average scores.
+                new_moving_average = np.zeros((len(self.metagraph.nodes)))
+                new_latencies = np.full(
+                    len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
+                )
+                new_latency_scores = np.zeros((len(self.metagraph.nodes)))
+                min_len = min(len(old_hotkeys), len(self.scores))
+                len_latencies = min(len(old_hotkeys), len(self.latencies))
+                len_latency_scores = min(len(old_hotkeys), len(self.latency_scores))
+
+                new_moving_average[:min_len] = self.scores[:min_len]
+                new_latencies[:len_latencies] = self.latencies[:len_latencies]
+                new_latency_scores[:len_latency_scores] = self.latency_scores[
+                    :len_latency_scores
+                ]
+
+                self.scores = new_moving_average
+                self.latencies = new_latencies
+                self.latency_scores = new_latency_scores
+                logger.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
+                logger.debug(
+                    f"(len: {len(self.latencies)}) New latencies: {self.latencies}"
+                )
+                logger.debug(
+                    f"(len: {len(self.latency_scores)}) New latency scores: {self.latency_scores}"
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to sync metagraph: {str(e)}")
+
+    def update_scores(self, rewards: np.ndarray, uids: list[int]):
+        """Performs exponential moving average on the scores based on the rewards received from the miners."""
+
+        # Check if rewards contains NaN values.
+        if np.isnan(rewards).any():
+            logger.warning(f"NaN values detected in rewards: {rewards}")
+            # Replace any NaN values in rewards with 0.
+            rewards = np.nan_to_num(rewards, nan=0)
+
+        # Ensure rewards is a numpy array.
+        rewards = np.asarray(rewards)
+
+        # Check if `uids` is already a numpy array and copy it to avoid the warning.
+        if isinstance(uids, np.ndarray):
+            uids_array = uids.copy()
+        else:
+            uids_array = np.array(uids)
+
+        # Handle edge case: If either rewards or uids_array is empty.
+        if rewards.size == 0 or uids_array.size == 0:
+            logger.info(f"rewards: {rewards}, uids_array: {uids_array}")
+            logger.warning(
+                "Either rewards or uids_array is empty. No updates will be performed."
+            )
+            return
+
+        # Check if sizes of rewards and uids_array match.
+        if rewards.size != uids_array.size:
+            raise ValueError(
+                f"Shape mismatch: rewards array of shape {rewards.shape} "
+                f"cannot be broadcast to uids array of shape {uids_array.shape}"
+            )
+
+        # Compute forward pass rewards, assumes uids are mutually exclusive.
+        # shape: [ metagraph.n ]
+        scattered_rewards: np.ndarray = np.zeros_like(self.scores)
+        scattered_rewards[uids_array] = rewards
+        # TODO: change some of these logging levels back to "debug"
+        logger.info(f"Scattered rewards: {rewards}")
+
+        # Update scores with rewards produced by this step.
+        # shape: [ metagraph.n ]
+        alpha: float = self.settings.neuron.moving_average_alpha
+        self.scores: np.ndarray = alpha * scattered_rewards + (1 - alpha) * self.scores
+        logger.info(f"Updated moving avg scores: {self.scores}")
+
     @override
-    async def sync_loop(self):
+    def run(self):
         """Background task to sync metagraph"""
 
         while True:
             try:
-                await self.sync_metagraph()
-                await self.perform_handshakes()
-                await asyncio.sleep(SYNC_FREQUENCY)
+                self.sync_metagraph()
+                future = asyncio.run_coroutine_threadsafe(
+                    self.perform_handshakes(), self.loop
+                )
+                future.result()  # Wait for the coroutine to complete
+                # TODO: diff logic for organic and synthetic
+                # if self.settings.organic:
+                future = asyncio.run_coroutine_threadsafe(self.forward(), self.loop)
+                future.result()  # Wait for the coroutine to complete
+                # else:
+                # self.loop.run_until_complete(self.forward())
+                self.save_state()
+                time.sleep(self.settings.neuron.epoch_length)
             except Exception as e:
                 logger.error(f"Error in sync loop: {e}")
-                await asyncio.sleep(SYNC_FREQUENCY // 2)
+                time.sleep(self.settings.neuron.epoch_length // 2)
+
+    def run_in_background_thread(self):
+        """
+        Starts the validator's operations in a background thread.
+        """
+        logger.info("Starting validator in background thread.")
+        self.should_exit = False
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+        self.is_running = True
+        logger.info("Started")
 
     # TODO: change params?
     async def get_miners_for_file(
@@ -318,9 +460,9 @@ class Validator(Neuron):
             self.latency_scores = new_latency_scores
             self.scores = new_scores
 
-        logger.debug(f"response rate scores: {response_rate_scores}")
-        logger.debug(f"moving avg. latencies: {self.latencies}")
-        logger.debug(f"moving avg. latency scores: {self.latency_scores}")
+        logger.info(f"response rate scores: {response_rate_scores}")
+        logger.info(f"moving avg. latencies: {self.latencies}")
+        logger.info(f"moving avg. latency scores: {self.latency_scores}")
 
         # TODO: this should also take the "pdp challenge score" into account
         # TODO: this is a little cooked ngl - will see if it is OK to go without indexing
@@ -998,3 +1140,32 @@ class Validator(Neuron):
             media_type="application/octet-stream",
             headers=headers,
         )
+
+    def save_state(self):
+        """Saves the state of the validator to a file."""
+        logger.info("Saving validator state.")
+
+        # Save the state of the validator to file.
+        np.savez(
+            self.settings.full_path + "/state.npz",
+            scores=self.scores,
+            hotkeys=list(self.metagraph.nodes.keys()),
+            latencies=self.latencies,
+            latency_scores=self.latency_scores,
+        )
+
+    def load_state(self):
+        """Loads the state of the validator from a file."""
+        logger.info("Loading validator state.")
+
+        # Load the state of the validator from file.
+        try:
+            state = np.load(self.settings.full_path + "/state.npz")
+        except FileNotFoundError:
+            logger.info("State file was not found, skipping loading state")
+            return
+
+        self.scores = state["scores"]
+        self.hotkeys = state["hotkeys"]
+        self.latencies = state.get("latencies", self.latencies)
+        self.latency_scores = state.get("latency_scores", self.latency_scores)

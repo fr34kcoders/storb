@@ -63,20 +63,21 @@ def factory_app(conf: StorbConfig, debug: bool = False) -> FastAPI:
     async def lifespan(app: FastAPI):
         config = custom_config(conf)
         metagraph = config.metagraph
-        sync_thread = None
-        if metagraph.substrate is not None:
-            sync_thread = threading.Thread(
-                target=metagraph.periodically_sync_nodes, daemon=True
-            )
-            sync_thread.start()
+        # sync_thread = None
+        # if metagraph.substrate is not None:
+        #     sync_thread = threading.Thread(
+        #         target=metagraph.periodically_sync_nodes, daemon=True
+        #     )
+        #     sync_thread.start()
 
         yield
 
         logger.info("Shutting down...")
 
+        # TODO: should this be moved elsewhere?
         metagraph.shutdown()
-        if metagraph.substrate is not None and sync_thread is not None:
-            sync_thread.join()
+        # if metagraph.substrate is not None and sync_thread is not None:
+        #     sync_thread.join()
 
     app = FastAPI(lifespan=lifespan, debug=debug)
 
