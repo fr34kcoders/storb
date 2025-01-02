@@ -18,10 +18,9 @@ network = "finney"
 address = "wss://entrypoint-finney.opentensor.ai:443"
 
 [neuron]
-epoch_length = 100
 events_retention_size = 2147483648 # 2 GiB
 dont_save_events = false
-sync_frequency = 5
+sync_frequency = 300
 
 [dht]
 port = 6942

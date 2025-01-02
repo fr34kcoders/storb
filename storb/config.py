@@ -3,7 +3,7 @@ Configuration options for Storb
 """
 
 from argparse import ArgumentParser
-import os
+from pathlib import Path
 
 from dynaconf import Dynaconf
 
@@ -46,19 +46,20 @@ class Config:
     @classmethod
     def add_full_path(cls, options, neuron_name: str):
         r"""Checks/validates the config namespace object."""
-        full_path = os.path.expanduser(
-            "{}/{}/{}/netuid{}/{}".format(
-                "~/.bittensor/neurons",  # TODO: change from ~/.bittensor/miners to ~/.bittensor/neurons
-                options.wallet_name,
-                options.hotkey_name,
-                options.netuid,
-                neuron_name,
-            )
+        base_path = (
+            Path.home() / ".bittensor" / "neurons"
+        )  # Update path as noted in the TODO
+        full_path = (
+            base_path
+            / options.wallet_name
+            / options.hotkey_name
+            / f"netuid{options.netuid}"
+            / neuron_name
         )
         print("full path:", full_path)
-        options.full_path = os.path.expanduser(full_path)
-        if not os.path.exists(options.full_path):
-            os.makedirs(options.full_path, exist_ok=True)
+        options.full_path = full_path
+        if not full_path.exists():
+            full_path.mkdir(parents=True, exist_ok=True)
 
     def add_args(self):
         self._parser.add_argument(
@@ -140,13 +141,6 @@ class Config:
             type=int,
             help="The default sync frequency",
             default=self.settings.neuron.sync_frequency,
-        )
-
-        self._parser.add_argument(
-            "--neuron.epoch_length",
-            type=int,
-            help="The default epoch length (how often we set weights, measured in 12 second blocks).",
-            default=self.settings.neuron.epoch_length,
         )
 
         self._parser.add_argument(

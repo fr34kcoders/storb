@@ -1,6 +1,7 @@
 import asyncio
 import logging as pylog
 import sys
+import time
 from abc import ABC, abstractmethod
 
 import httpx
@@ -122,7 +123,7 @@ class Neuron(ABC):
             )
             sys.exit(1)
 
-    async def sync_metagraph(self):
+    def sync_metagraph(self):
         """Synchronize local metagraph state with chain.
 
         Creates new metagraph instance if needed and syncs node data.
@@ -143,13 +144,13 @@ class Neuron(ABC):
         except Exception as e:
             logger.error(f"Failed to sync metagraph: {str(e)}")
 
-    async def run(self):
+    def run(self):
         """Background task to sync metagraph"""
 
         while True:
             try:
-                await self.sync_metagraph()
-                await asyncio.sleep(self.settings.neuron.epoch_length)
+                self.sync_metagraph()
+                time.sleep(self.settings.neuron.sync_frequency)
             except Exception as e:
                 logger.error(f"Error in sync metagraph: {e}")
-                await asyncio.sleep(self.settings.neuron.epoch_length // 2)
+                time.sleep(self.settings.neuron.sync_frequency // 2)

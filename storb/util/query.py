@@ -29,6 +29,8 @@ logger = get_logger(__name__)
 def custom_config(config: StorbConfig) -> Config:
     nonce_manager = nonce_management.NonceManager()
 
+    min_stake_threshold = config.settings.min_stake_threshold
+
     wallet_name = config.settings.wallet_name
     hotkey_name = config.settings.hotkey_name
     netuid = config.settings.netuid
@@ -36,9 +38,8 @@ def custom_config(config: StorbConfig) -> Config:
     subtensor_address = config.settings.subtensor.address
     load_old_nodes = True
     # NOTE: This doesn't really have any effect on how the validator operates
-    min_stake_threshold = config.settings.min_stake_threshold
 
-    assert netuid is not None, "Must set NETUID env var please!"
+    assert netuid is not None, "Must set netuid!"
 
     substrate = interface.get_substrate(subtensor_network, subtensor_address)
     metagraph = Metagraph(

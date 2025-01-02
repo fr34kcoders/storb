@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import copy
 import hashlib
 import sys
@@ -7,17 +6,17 @@ import threading
 import time
 import typing
 from datetime import UTC, datetime
-from typing import AsyncGenerator, Literal, Optional, override
-from urllib.parse import unquote
+from typing import AsyncGenerator, Literal, override
 
 import aiosqlite
 import httpx
 import numpy as np
 import uvicorn
 import uvicorn.config
-from fastapi import Body, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fiber.chain import interface
+from fiber.chain.weights import set_node_weights
 from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
@@ -78,6 +77,7 @@ class Validator(Neuron):
         self.symmetric_keys: dict[int, tuple[str, str]] = {}
 
         self.scores = np.zeros(len(self.metagraph.nodes), dtype=np.float32)
+        self.scores_lock = threading.Lock()
         self.latencies = np.full(
             len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
         )
@@ -93,7 +93,6 @@ class Validator(Neuron):
         self.app_init()
         await self.start_dht()
 
-        # asyncio.create_task(self.run())
         self.run_in_background_thread()
 
         config = uvicorn.Config(
@@ -217,43 +216,45 @@ class Validator(Neuron):
 
             logger.info("Metagraph updated, re-syncing hotkeys and moving averages")
 
-            old_hotkeys = list(self.metagraph.nodes.keys())
-            for uid, hotkey in enumerate(old_hotkeys):
-                if hotkey != self.metagraph.hotkeys[uid]:
-                    self.scores[uid] = 0  # hotkey has been replaced
+            with self.scores_lock:
+                old_hotkeys = list(self.metagraph.nodes.keys())
+                for uid, hotkey in enumerate(old_hotkeys):
+                    if hotkey != self.metagraph.hotkeys[uid]:
+                        self.scores[uid] = 0  # hotkey has been replaced
 
-            # Check to see if the metagraph has changed size.
-            # If so, we need to add new hotkeys and moving averages.
-            if len(old_hotkeys) < len(self.metagraph.hotkeys):
-                logger.debug(
-                    "New uid added to subnet, updating length of scores arrays"
-                )
-                # Update the size of the moving average scores.
-                new_moving_average = np.zeros((len(self.metagraph.nodes)))
-                new_latencies = np.full(
-                    len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
-                )
-                new_latency_scores = np.zeros((len(self.metagraph.nodes)))
-                min_len = min(len(old_hotkeys), len(self.scores))
-                len_latencies = min(len(old_hotkeys), len(self.latencies))
-                len_latency_scores = min(len(old_hotkeys), len(self.latency_scores))
+                # Check to see if the metagraph has changed size.
+                # If so, we need to add new hotkeys and moving averages.
+                if len(old_hotkeys) < len(self.metagraph.hotkeys):
+                    logger.debug(
+                        "New uid added to subnet, updating length of scores arrays"
+                    )
+                    # Update the size of the moving average scores.
+                    new_moving_average = np.zeros((len(self.metagraph.nodes)))
+                    new_latencies = np.full(
+                        len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32
+                    )
+                    new_latency_scores = np.zeros((len(self.metagraph.nodes)))
+                    min_len = min(len(old_hotkeys), len(self.scores))
+                    len_latencies = min(len(old_hotkeys), len(self.latencies))
+                    len_latency_scores = min(len(old_hotkeys), len(self.latency_scores))
 
-                new_moving_average[:min_len] = self.scores[:min_len]
-                new_latencies[:len_latencies] = self.latencies[:len_latencies]
-                new_latency_scores[:len_latency_scores] = self.latency_scores[
-                    :len_latency_scores
-                ]
+                    new_moving_average[:min_len] = self.scores[:min_len]
+                    new_latencies[:len_latencies] = self.latencies[:len_latencies]
+                    new_latency_scores[:len_latency_scores] = self.latency_scores[
+                        :len_latency_scores
+                    ]
 
-                self.scores = new_moving_average
-                self.latencies = new_latencies
-                self.latency_scores = new_latency_scores
-                logger.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
-                logger.debug(
-                    f"(len: {len(self.latencies)}) New latencies: {self.latencies}"
-                )
-                logger.debug(
-                    f"(len: {len(self.latency_scores)}) New latency scores: {self.latency_scores}"
-                )
+                    self.scores = new_moving_average
+
+                    self.latencies = new_latencies
+                    self.latency_scores = new_latency_scores
+                    logger.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
+                    logger.debug(
+                        f"(len: {len(self.latencies)}) New latencies: {self.latencies}"
+                    )
+                    logger.debug(
+                        f"(len: {len(self.latency_scores)}) New latency scores: {self.latency_scores}"
+                    )
 
         except Exception as e:
             logger.error(f"Failed to sync metagraph: {str(e)}")
@@ -293,16 +294,58 @@ class Validator(Neuron):
 
         # Compute forward pass rewards, assumes uids are mutually exclusive.
         # shape: [ metagraph.n ]
-        scattered_rewards: np.ndarray = np.zeros_like(self.scores)
-        scattered_rewards[uids_array] = rewards
-        # TODO: change some of these logging levels back to "debug"
-        logger.info(f"Scattered rewards: {rewards}")
+        with self.scores_lock:
+            scattered_rewards: np.ndarray = np.zeros_like(self.scores)
+            scattered_rewards[uids_array] = rewards
+            # TODO: change some of these logging levels back to "debug"
+            logger.info(f"Scattered rewards: {rewards}")
 
-        # Update scores with rewards produced by this step.
-        # shape: [ metagraph.n ]
-        alpha: float = self.settings.neuron.moving_average_alpha
-        self.scores: np.ndarray = alpha * scattered_rewards + (1 - alpha) * self.scores
-        logger.info(f"Updated moving avg scores: {self.scores}")
+            # Update scores with rewards produced by this step.
+            # shape: [ metagraph.n ]
+            alpha: float = self.settings.neuron.moving_average_alpha
+            self.scores: np.ndarray = alpha * scattered_rewards + (1 - alpha) * self.scores
+            logger.info(f"Updated moving avg scores: {self.scores}")
+
+    def set_weights(self):
+        """
+        Sets the validator weights to the metagraph hotkeys based on the scores it has received from the miners. The weights determine the trust and incentive level the validator assigns to miner nodes on the network.
+        """
+
+        # Check if self.scores contains any NaN values and log a warning if it does.
+        with self.scores_lock:
+            if np.isnan(self.scores).any():
+                logger.warning(
+                    "Scores contain NaN values. This may be due to a lack of responses from miners, or a bug in your reward functions."
+                )
+
+            # Calculate the average reward for each uid across non-zero values.
+            # Replace any NaN values with 0.
+            # Compute the norm of the scores
+            norm = np.linalg.norm(self.scores, ord=1, axis=0, keepdims=True)
+
+            # Check if the norm is zero or contains NaN values
+            if np.any(norm == 0) or np.isnan(norm).any():
+                norm = np.ones_like(norm)  # Avoid division by zero or NaN
+
+            # Compute raw_weights safely
+            raw_weights = self.scores / norm
+
+        weights_uids = [node.node_id for node in self.metagraph.nodes.values()]
+
+        # TODO: change these to be debug
+        logger.info(f"weights: {raw_weights}")
+        logger.info(f"weights_uids: {weights_uids}")
+        # Set the weights
+        result = set_node_weights(
+            substrate=self.metagraph.substrate,
+            keypair=self.keypair,
+            node_ids=weights_uids,
+            node_weights=raw_weights,
+            netuid=self.netuid,
+            validator_node_id=self.uid,
+            version_key=1,
+            max_attempts=2,
+        )
 
     @override
     def run(self):
@@ -311,30 +354,34 @@ class Validator(Neuron):
         while True:
             try:
                 self.sync_metagraph()
-                future = asyncio.run_coroutine_threadsafe(
+                handshake_fut = asyncio.run_coroutine_threadsafe(
                     self.perform_handshakes(), self.loop
                 )
-                future.result()  # Wait for the coroutine to complete
+                handshake_fut.result()  # Wait for the coroutine to complete
                 # TODO: diff logic for organic and synthetic
                 # if self.settings.organic:
-                future = asyncio.run_coroutine_threadsafe(self.forward(), self.loop)
-                future.result()  # Wait for the coroutine to complete
+                forward_fut = asyncio.run_coroutine_threadsafe(
+                    self.forward(), self.loop
+                )
+                forward_fut.result()  # Wait for the coroutine to complete
                 # else:
                 # self.loop.run_until_complete(self.forward())
+                self.set_weights()
                 self.save_state()
-                time.sleep(self.settings.neuron.epoch_length)
+                time.sleep(self.settings.neuron.sync_frequency)
             except Exception as e:
                 logger.error(f"Error in sync loop: {e}")
-                time.sleep(self.settings.neuron.epoch_length // 2)
+                time.sleep(self.settings.neuron.sync_frequency // 2)
 
     def run_in_background_thread(self):
         """
         Starts the validator's operations in a background thread.
         """
-        logger.info("Starting validator in background thread.")
+        logger.info("Starting backgroud operations in background thread.")
         self.should_exit = False
-        self.thread = threading.Thread(target=self.run, daemon=True)
-        self.thread.start()
+        self.sync_thread = threading.Thread(target=self.run, daemon=True)
+        self.sync_thread.start()
+        # let the sync thread do its thing for a bit
         self.is_running = True
         logger.info("Started")
 
@@ -450,15 +497,18 @@ class Validator(Neuron):
 
             len_lat = len(self.latencies)
             len_lat_scores = len(self.latency_scores)
-            len_scores = len(self.scores)
 
-            new_latencies[:len_lat] = self.latencies[:len_lat]
-            new_latency_scores[:len_lat_scores] = self.latency_scores[:len_lat_scores]
-            new_scores[:len_scores] = self.scores[:len_scores]
+            with self.scores_lock:
+                len_scores = len(self.scores)
 
-            self.latencies = new_latencies
-            self.latency_scores = new_latency_scores
-            self.scores = new_scores
+                new_latencies[:len_lat] = self.latencies[:len_lat]
+                new_latency_scores[:len_lat_scores] = self.latency_scores[:len_lat_scores]
+                new_scores[:len_scores] = self.scores[:len_scores]
+
+                self.latencies = new_latencies
+                self.latency_scores = new_latency_scores
+
+                self.scores = new_scores
 
         logger.info(f"response rate scores: {response_rate_scores}")
         logger.info(f"moving avg. latencies: {self.latencies}")
@@ -1146,13 +1196,14 @@ class Validator(Neuron):
         logger.info("Saving validator state.")
 
         # Save the state of the validator to file.
-        np.savez(
-            self.settings.full_path + "/state.npz",
-            scores=self.scores,
-            hotkeys=list(self.metagraph.nodes.keys()),
-            latencies=self.latencies,
-            latency_scores=self.latency_scores,
-        )
+        with self.scores_lock:
+            np.savez(
+                self.settings.full_path / "state.npz",
+                scores=self.scores,
+                hotkeys=list(self.metagraph.nodes.keys()),
+                latencies=self.latencies,
+                latency_scores=self.latency_scores,
+            )
 
     def load_state(self):
         """Loads the state of the validator from a file."""
@@ -1160,12 +1211,13 @@ class Validator(Neuron):
 
         # Load the state of the validator from file.
         try:
-            state = np.load(self.settings.full_path + "/state.npz")
+            state = np.load(self.settings.full_path / "state.npz")
         except FileNotFoundError:
             logger.info("State file was not found, skipping loading state")
             return
 
-        self.scores = state["scores"]
+        with self.scores_lock:
+            self.scores = state["scores"]
         self.hotkeys = state["hotkeys"]
         self.latencies = state.get("latencies", self.latencies)
         self.latency_scores = state.get("latency_scores", self.latency_scores)

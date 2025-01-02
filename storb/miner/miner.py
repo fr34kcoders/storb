@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 import uuid
 from typing import Optional
 
@@ -41,7 +42,7 @@ class Miner(Neuron):
         self.app_init()
         await self.start_dht()
 
-        # asyncio.create_task(self.run())
+        self.run_in_background_thread()
 
         config = uvicorn.Config(self.app, host="0.0.0.0", port=self.settings.api_port)
         self.server = uvicorn.Server(config)
@@ -51,6 +52,17 @@ class Miner(Neuron):
         except Exception as e:
             logger.error(f"Failed to start miner server {e}")
             raise
+
+    def run_in_background_thread(self):
+        """
+        Starts the miner's operations in a background thread.
+        """
+        logger.info("Starting background operations in background thread.")
+        self.should_exit = False
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+        self.is_running = True
+        logger.info("Started")
 
     async def stop(self):
         if self.server:
@@ -150,7 +162,7 @@ class Miner(Neuron):
         piece = await self.object_store.read(request.piece_id)
 
         # Create the JSON metadata response
-        metadata = protocol.Retrieve(piece_id=request.piece_id).model_dump()
+        metadata = protocol.Retrieve(piece_id=request.piece_id).model_dump_json()
 
         # Boundary definition
         boundary = str(uuid.uuid4())
@@ -159,7 +171,7 @@ class Miner(Neuron):
             # JSON part
             yield f"--{boundary}\r\n".encode("utf-8")
             yield b"Content-Type: application/json\r\n\r\n"
-            yield json.dumps(metadata).encode("utf-8")
+            yield metadata
 
             # File part
             if piece:
