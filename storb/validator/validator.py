@@ -399,7 +399,7 @@ class Validator(Neuron):
         server_addr = f"http://{node.ip}:{node.port}"
         symmetric_key = self.symmetric_keys.get(node.node_id)
         if not symmetric_key:
-            logger.warning(f"Entry for node ID {node.node_id} not found")
+            # logger.warning(f"Entry for node ID {node.node_id} not found")
             return node.node_id, None
         _, symmetric_key_uuid = symmetric_key
 
@@ -699,7 +699,7 @@ class Validator(Neuron):
             chunk_idx = 0
             queue = asyncio.Queue()
 
-            async def producer(queue: asyncio.Queue):
+            async def produce(queue: asyncio.Queue):
                 nonlocal done_reading
                 nonlocal chunk_size
                 try:
@@ -713,7 +713,7 @@ class Validator(Neuron):
                 except Exception as e:
                     logger.error(f"Error with producer: {e}")
 
-            async def consumer(queue: asyncio.Queue):
+            async def consume(queue: asyncio.Queue):
                 nonlocal chunk_idx
                 nonlocal piece_hashes
                 nonlocal chunk_hashes
@@ -771,16 +771,16 @@ class Validator(Neuron):
                     finally:
                         queue.task_done()
 
-            consooomer = asyncio.create_task(consumer(queue))
-            await producer(queue)
+            consumer = asyncio.create_task(consume(queue))
+            await produce(queue)
 
             # Wait until the consumers have processed all the data
             await queue.join()
 
-            # stop consoooming
-            consooomer.cancel()
+            # stop consuming
+            consumer.cancel()
 
-            await asyncio.gather(consooomer, return_exceptions=True)
+            await asyncio.gather(consumer, return_exceptions=True)
 
             infohash, _ = generate_infohash(
                 filename, timestamp, chunk_size, filesize, list(piece_hashes)
@@ -815,7 +815,7 @@ class Validator(Neuron):
                 ),
             )
 
-            logger.info(f"Generated {len(piece_hashes)} unique pieces: {piece_hashes}")
+            logger.info(f"Generated {len(piece_hashes)} unique pieces")
             logger.info(f"Uploaded file with infohash: {infohash}")
             return protocol.StoreResponse(infohash=infohash)
 
@@ -863,7 +863,7 @@ class Validator(Neuron):
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
 
-        logger.info(f"Response from validator {validator_to_ask}: {response}")
+        logger.info(f"Got response from validator {validator_to_ask}")
 
         piece_ids = []
         pieces = []
