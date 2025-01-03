@@ -27,8 +27,6 @@ class Miner(Neuron):
 
         self.object_store = ObjectStore(store_dir=self.settings.store_dir)
 
-        # TODO: set up loggers
-
     async def start(self):
         self.app_init()
         await self.start_dht()
@@ -113,7 +111,6 @@ class Miner(Neuron):
 
         logger.debug("Received store request")
 
-        # TODO: Use raw bytes rather than b64 encoded str
         piece_info = protocol.Store.model_validate_json(json_data)
         piece_bytes = await file.read()
         piece_id = piece_hash(piece_bytes)

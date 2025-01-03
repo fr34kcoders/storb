@@ -149,7 +149,6 @@ async def get_metadata(
     return dict(row)
 
 
-# TODO: get stuff
 async def get_chunks_from_infohash(
     conn: aiosqlite.Connection, infohash: str
 ) -> Optional[list[str]]:  # noqa: F821

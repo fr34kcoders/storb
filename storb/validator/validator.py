@@ -433,11 +433,9 @@ class Validator(Neuron):
         self.is_running = True
         logger.info("Started")
 
-    # TODO: change params?
     async def get_miners_for_file(
         self, request: protocol.GetMiners = Body(...)
     ) -> protocol.GetMiners:
-        # TODO: change docstring?
         """Retrieve the list of miners responsible for storing the pieces of a
         file based on its infohash.
 
@@ -946,6 +944,7 @@ class Validator(Neuron):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
 
+    # TODO: Stream the file upload
     async def upload_file(self, file: UploadFile = File(...)) -> protocol.StoreResponse:
         """Upload a file"""
 
@@ -953,8 +952,6 @@ class Validator(Neuron):
         request = file
 
         try:
-            print("req headers", request.headers)
-            # TODO: currently filename isn't set so fix this
             filename = request.filename
             if not filename:
                 raise HTTPException(
@@ -1122,7 +1119,6 @@ class Validator(Neuron):
             print("Script terminated by user.")
             sys.exit(0)
 
-    # TODO: WIP
     async def get_file(self, infohash: str):
         """Get a file"""
 
@@ -1130,10 +1126,6 @@ class Validator(Neuron):
         tracker_dht = await self.dht.get_tracker_entry(infohash)
         validator_to_ask = tracker_dht.validator_id
         validator_hotkey = list(self.metagraph.nodes.keys())[validator_to_ask]
-
-        # Get the uids of the miner(s) that store each respective piece
-        # by asking the validator
-        # TODO: query miner
 
         synapse = protocol.GetMiners(infohash=infohash)
         payload = Payload(data=synapse)
