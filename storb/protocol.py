@@ -2,7 +2,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from storb.dht.piece_dht import ChunkDHTValue, PieceDHTValue
+from storb.dht.chunk_dht import ChunkDHTValue
+from storb.dht.piece_dht import PieceDHTValue
 from storb.util.piece import ProcessedPieceInfo
 
 
@@ -38,7 +39,7 @@ class MetadataResponse(BaseModel):
     infohash: str
     filename: str
     timestamp: str
-    piece_length: int
+    chunk_size: int
     length: int
 
 

@@ -40,7 +40,7 @@ class EncodedChunk(BaseModel):
     m: int  # Total blocks (data + parity)
     chunk_size: int
     padlen: int
-    original_chunk_length: int
+    original_chunk_size: int
 
 
 class ProcessedPieceInfo(Piece):
@@ -157,7 +157,7 @@ def encode_chunk(chunk: bytes, chunk_idx: int) -> EncodedChunk:
         m=m,
         chunk_size=zfec_chunk_size,
         padlen=padlen,
-        original_chunk_length=chunk_size,
+        original_chunk_size=chunk_size,
     )
 
     logger.debug(

@@ -21,7 +21,7 @@ dependencies = [
     "fastapi>=0.112.0",
     "fiber @ git+https://github.com/fr34kcoders/fiber.git",
     "httpx>=0.28.1",
-    "kademlia>=2.2.2",
+    "storb-kademlia @ git+https://github.com/fr34kcoders/storb-kademlia.git",
     "numpy==2.0.2",
     "pydantic>=2.9.2",
     "python-multipart>=0.0.19",
