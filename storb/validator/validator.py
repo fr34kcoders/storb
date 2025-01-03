@@ -1135,7 +1135,6 @@ class Validator(Neuron):
         # by asking the validator
         # TODO: query miner
 
-        # TODO: ew don't use this language
         synapse = protocol.GetMiners(infohash=infohash)
         payload = Payload(data=synapse)
         _, recv_payload = await self.query_miner(
@@ -1177,14 +1176,12 @@ class Validator(Neuron):
                 piece_ids.append(piece_id)
                 # TODO: many of these can be moved around and placed into their own functions
 
-                # TODO: ew don't use this language
                 # get piece(s) from miner(s)
                 synapse = protocol.Retrieve(piece_id=piece_id)
                 payload = Payload(data=synapse)
                 to_query.append(
                     asyncio.create_task(
                         self.query_miner(
-                            # TODO: ew
                             miner_hotkey=list(self.metagraph.nodes.keys())[
                                 chunk_pieces_metadata[piece_idx].miner_id
                             ],
