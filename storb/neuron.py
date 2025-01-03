@@ -87,12 +87,7 @@ class Neuron(ABC):
         assert self.metagraph, "Metagraph must be initialised"
         self.metagraph.sync_nodes()
 
-        self.check_registration()
-        self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
-        assert self.uid, "UID must be defined"
-
-        self.dht = DHT(self.settings.dht.port)
-        assert self.dht, "DHT must be initialised"
+        self.dht = DHT(self.settings.dht.port, self.settings.dht.file)
 
         setup_rotating_logger(
             logger_name="kademlia", log_level=pylog.DEBUG, max_size=LOG_MAX_SIZE
