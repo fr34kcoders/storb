@@ -1,4 +1,3 @@
-import asyncio
 import logging as pylog
 import sys
 import time
@@ -10,7 +9,6 @@ from fastapi import FastAPI
 from fiber.chain import chain_utils, interface, post_ip_to_chain
 from fiber.chain.metagraph import Metagraph
 from fiber.logging_utils import get_logger
-from substrateinterface.keypair import Keypair
 
 from storb import __spec_version__, get_spec_version
 from storb.config import Config
@@ -36,15 +34,19 @@ class Neuron(ABC):
         ), "The spec versions must match"
 
         # Miners and validators must set these themselves
-        self.keypair: Keypair = None
-        self.uid: str = None
         self.app: FastAPI = None
-        self.server: uvicorn.Server = None
-        self.httpx_client: httpx.AsyncClient = None
-        self.api_port: int = self.settings.api_port
 
-        assert self.settings.wallet_name, "Wallet name is not defined"
-        assert self.settings.hotkey_name, "Hotkey name is not defined"
+        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.settings.api_port)
+        self.server = uvicorn.Server(config)
+        self.httpx_client = httpx.AsyncClient()
+        assert self.server, "Uvicorn server must be initialised"
+        assert self.httpx_client, "HTTPX client must be initialised"
+
+        self.api_port: int = self.settings.api_port
+        assert self.api_port, "API port must be defined"
+
+        assert self.settings.wallet_name, "Wallet must be defined"
+        assert self.settings.hotkey_name, "Hotkey must be defined"
 
         logger.info(
             f"Attempt to load hotkey keypair with wallet name: {self.settings.wallet_name}"
@@ -52,19 +54,26 @@ class Neuron(ABC):
         self.keypair = chain_utils.load_hotkey_keypair(
             self.settings.wallet_name, self.settings.hotkey_name
         )
-
-        self.netuid = self.settings.netuid
-        self.external_ip = self.settings.external_ip
+        assert self.keypair, "Keypair must be defined"
 
         self.subtensor_network = self.settings.subtensor.network
         self.subtensor_address = self.settings.subtensor.address
+        assert self.subtensor_network, "Subtensor network must be defined"
+        assert self.subtensor_address, "Subtensor address must be defined"
 
         self.substrate = interface.get_substrate(
             subtensor_network=self.subtensor_network,
             subtensor_address=self.subtensor_address,
         )
+        assert self.substrate, "Substrate must be defined"
+
+        self.netuid = self.settings.netuid
+        self.external_ip = self.settings.external_ip
+
+        assert self.netuid, "Netuid must be defined"
 
         if self.settings.post_ip:
+            assert self.external_ip, "External IP must be defined"
             post_ip_to_chain.post_node_ip_to_chain(
                 self.substrate,
                 self.keypair,
@@ -75,9 +84,15 @@ class Neuron(ABC):
             )
 
         self.metagraph = Metagraph(netuid=self.netuid, substrate=self.substrate)
+        assert self.metagraph, "Metagraph must be initialised"
         self.metagraph.sync_nodes()
 
+        self.check_registration()
+        self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
+        assert self.uid, "UID must be defined"
+
         self.dht = DHT(self.settings.dht.port)
+        assert self.dht, "DHT must be initialised"
 
         setup_rotating_logger(
             logger_name="kademlia", log_level=pylog.DEBUG, max_size=LOG_MAX_SIZE

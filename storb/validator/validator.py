@@ -11,8 +11,6 @@ from typing import AsyncGenerator, Literal, override
 import aiosqlite
 import httpx
 import numpy as np
-import uvicorn
-import uvicorn.config
 from fastapi import Body, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fiber.chain import interface
@@ -65,15 +63,11 @@ class Validator(Neuron):
     def __init__(self):
         super(Validator, self).__init__(NeuronType.Validator)
 
-        self.check_registration()
-        self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
-
         # TODO: have list of connected miners
 
         self.db_dir = self.settings.validator.db_dir
         self.query_timeout = self.settings.validator.query.timeout
 
-        self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
         self.symmetric_keys: dict[int, tuple[str, str]] = {}
 
         self.scores = np.zeros(len(self.metagraph.nodes), dtype=np.float32)
@@ -102,18 +96,10 @@ class Validator(Neuron):
         self.loop = asyncio.get_event_loop()
 
     async def start(self):
-        self.httpx_client = httpx.AsyncClient()
         self.app_init()
         await self.start_dht()
 
         self.run_in_background_thread()
-
-        config = uvicorn.Config(
-            self.app,
-            host="0.0.0.0",
-            port=self.settings.api_port,
-        )
-        self.server = uvicorn.Server(config)
 
         try:
             await self.server.serve()
@@ -731,7 +717,7 @@ class Validator(Neuron):
                 if json_data or json_data != {"detail": "Not Found"}:
                     try:
                         data = payload.data.model_validate(json_data)
-                    except:
+                    except Exception:
                         logger.warning(
                             "Payload data validation error, setting it to None"
                         )

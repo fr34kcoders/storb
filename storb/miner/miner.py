@@ -1,11 +1,7 @@
-import asyncio
-import json
 import threading
 import uuid
 from typing import Optional
 
-import httpx
-import uvicorn
 from fastapi import Form, UploadFile
 from fastapi.responses import StreamingResponse
 from fiber.encrypted.miner.endpoints.handshake import (
@@ -30,22 +26,15 @@ class Miner(Neuron):
     def __init__(self):
         super(Miner, self).__init__(NeuronType.Miner)
 
-        self.check_registration()
-        self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
-
         self.object_store = ObjectStore(store_dir=self.settings.store_dir)
 
         # TODO: set up loggers
 
     async def start(self):
-        self.httpx_client = httpx.AsyncClient()
         self.app_init()
         await self.start_dht()
 
         self.run_in_background_thread()
-
-        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.settings.api_port)
-        self.server = uvicorn.Server(config)
 
         try:
             await self.server.serve()
