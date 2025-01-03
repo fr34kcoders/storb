@@ -1,7 +1,7 @@
 [project]
-name = "storage_subnet"
+name = "storb"
 version = "0.1.0"
-description = "A storage subnet on Bittensor"
+description = "An object storage subnet on the Bittensor network"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
@@ -15,16 +15,20 @@ classifiers = [
 dependencies = [
     "aiofiles>=24.1.0",
     "aiosqlite>=0.20.0",
-    "bittensor==8.4.5",
     "colorlog>=6.9.0",
-    "fastapi>=0.110.3",
+    "cryptography>=44.0.0",
+    "dynaconf>=3.2.6",
+    "fastapi>=0.112.0",
+    "fiber @ git+https://github.com/fr34kcoders/fiber.git",
+    "httpx>=0.28.1",
     "kademlia>=2.2.2",
     "numpy==2.0.2",
-    "pydantic>=2.10.3",
+    "pydantic>=2.9.2",
     "python-multipart>=0.0.19",
     "rich>=13.9.4",
     "starlette==0.37.2",
-    "uvicorn>=0.32.1",
+    "substrate-interface>=1.7.10",
+    "uvicorn==0.30.5",
     "zfec>=1.6.0.0",
 ]
 
@@ -58,7 +62,7 @@ line-ending = "lf"
 quote-style = "double"
 
 [tool.setuptools]
-packages = ["storage_subnet"]
+packages = ["storb"]
 
 [tool.setuptools.package-dir]
-storage_subnet = "storage_subnet"
+storb = "storb"
