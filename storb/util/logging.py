@@ -1,6 +1,6 @@
 import logging
-import os
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 from colorlog import ColoredFormatter
 
@@ -20,8 +20,9 @@ def ensure_log_directory_exists(log_dir: str):
         Path to the log directory.
     """
 
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    path = Path(log_dir)
+    if not path.exists():
+        path.mkdir(parents=True)
 
 
 def setup_rotating_logger(
@@ -49,7 +50,7 @@ def setup_rotating_logger(
     ensure_log_directory_exists(log_dir)
 
     # Define log file
-    log_file = os.path.join(log_dir, f"{logger_name}.log")
+    log_file = Path(log_dir) / f"{logger_name}.log"
 
     # Create logger
     logger = logging.getLogger(logger_name)
@@ -76,7 +77,7 @@ def setup_rotating_logger(
 
     # Rotating file handler
     file_handler = RotatingFileHandler(
-        log_file, maxBytes=max_size, backupCount=DEFAULT_LOG_BACKUP_COUNT
+        str(log_file), maxBytes=max_size, backupCount=DEFAULT_LOG_BACKUP_COUNT
     )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(log_level)
