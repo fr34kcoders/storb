@@ -24,6 +24,7 @@ sync_frequency = 300
 
 [dht]
 port = 6942
+file= "vali-dht.bin
 
 [dht.bootstrap]
 ip = ""     # IPv4 format
