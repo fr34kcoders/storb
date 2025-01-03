@@ -1,6 +1,5 @@
 import threading
 import uuid
-from typing import Optional
 
 from fastapi import Form, UploadFile
 from fastapi.responses import StreamingResponse
@@ -95,7 +94,7 @@ class Miner(Neuron):
         return "Hello from the Storb miner!"
 
     async def store_piece(
-        self, json_data: Optional[str] = Form(None), file: Optional[UploadFile] = None
+        self, json_data: str = Form(None), file: UploadFile = None
     ) -> protocol.Store:
         """Stores a piece which is received from a validator.
 
