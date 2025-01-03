@@ -6,8 +6,11 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 from dynaconf import Dynaconf
+from fiber.logging_utils import get_logger
 
 from storb.constants import NeuronType
+
+logger = get_logger(__name__)
 
 
 class Config:
@@ -40,15 +43,15 @@ class Config:
                 )
 
         options = self._parser.parse_args()
+        logger.info(f"Current config: {vars(options)}")
         self.add_full_path(options, neuron_name)
         self.settings.update(vars(options))
 
     @classmethod
     def add_full_path(cls, options, neuron_name: str):
-        r"""Checks/validates the config namespace object."""
-        base_path = (
-            Path.home() / ".bittensor" / "neurons"
-        )  # Update path as noted in the TODO
+        """Validates that the neuron config path exists"""
+
+        base_path = Path.home() / ".bittensor" / "storb_neurons"
         full_path = (
             base_path
             / options.wallet_name
@@ -56,7 +59,8 @@ class Config:
             / f"netuid{options.netuid}"
             / neuron_name
         )
-        print("full path:", full_path)
+        logger.info(f"Full path: {full_path}")
+
         options.full_path = full_path
         if not full_path.exists():
             full_path.mkdir(parents=True, exist_ok=True)
