@@ -1,6 +1,5 @@
 import email
 import json
-import threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from email.policy import default
@@ -98,7 +97,7 @@ class Payload:
     # content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None
     data: Optional[BaseModel | Mapping[str, Any]] = None
     file: Optional[tuple[str, bytes]] = None
-    time_elapsed: float = -1.0
+    time_elapsed: float = QUERY_TIMEOUT
 
 
 # https://github.com/rayonlabs/fiber/blob/production/fiber/validator/client.py
