@@ -7,7 +7,6 @@ from fiber.logging_utils import get_logger
 from kademlia.storage import IStorage
 
 from storb import db
-from storb.constants import DB_DIR
 from storb.dht.chunk_dht import ChunkDHTValue
 from storb.dht.piece_dht import PieceDHTValue
 from storb.dht.tracker_dht import TrackerDHTValue
@@ -59,12 +58,12 @@ class PersistentStorageDHT(IStorage):
     This class stores DHT values in memory and in a SQLite database.
     """
 
-    def __init__(self, db_dir: str = DB_DIR):
+    def __init__(self, db_dir: str):
         """Initialize the PersistentStorageDHT.
 
         Parameters
         ----------
-            db_dir (str, optional): _description_. Defaults to DB_DIR
+            db_dir (str, optional): The path to the database directory.
         """
 
         self.db_path = db_dir
@@ -194,10 +193,8 @@ class PersistentStorageDHT(IStorage):
         ----------
         namespace : str
             namespace of the key (chunk, piece, tracker)
-
         key : str
             key to store
-
         value : bytes
             value to store
 

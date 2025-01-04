@@ -2,11 +2,15 @@ import asyncio
 import json
 import pickle
 import threading
-import os
+from pathlib import Path
+
 from fiber.logging_utils import get_logger
 from kademlia.network import Server
 
-from storb.constants import DHT_FILE, DHT_PORT
+from storb.constants import (
+    DHT_QUERY_TIMEOUT,
+    DHT_STARTUP_AND_SHUTDOWN_TIMEOUT,
+)
 from storb.dht.chunk_dht import ChunkDHTValue
 from storb.dht.piece_dht import PieceDHTValue
 from storb.dht.storage import PersistentStorageDHT, build_store_key
@@ -17,23 +21,34 @@ logger = get_logger(__name__)
 
 class DHT:
     def __init__(
-        self, port: int = DHT_PORT, file: str = DHT_FILE, startup_timeout: int = 2
+        self,
+        file: str,
+        db: str,
+        port: int,
+        startup_timeout: int = DHT_STARTUP_AND_SHUTDOWN_TIMEOUT,
     ):
         """Initialize the DHT server.
 
         Parameters
         ----------
+        file: str
+            Path to the save file to load the DHT state from.
+        db: str
+            Path to the database file to store the DHT data.
         port : int (optional)
-            Port number to run the DHT server on. Defaults to DHT_PORT.
+            Port number to run the DHT server on.
         startup_timeout : int (optional)
             Timeout in seconds to wait for the DHT server to start. Defaults to 5 seconds.
         """
 
         self.server: Server = Server(
-            storage=PersistentStorageDHT(),
+            storage=PersistentStorageDHT(
+                db_dir=db,
+            ),
         )
         self.port: int = port
         self.file: str = file
+        self.db: str = db
         self.startup_timeout: int = startup_timeout
         self.loop: asyncio.AbstractEventLoop = asyncio.new_event_loop()
         self.thread: threading.Thread | None = None
@@ -60,14 +75,17 @@ class DHT:
         asyncio.set_event_loop(self.loop)
 
         # Load the state from the save file if it exists
-        if os.path.exists(self.file):
+        file_path = Path(self.file)
+        if file_path.exists():
             logger.debug(f"Loading DHT state from {self.file}")
             try:
                 with open(self.file, "rb") as f:
                     logger.info("Loading state from %s", self.file)
                     data = pickle.load(f)
                     self.server = Server(
-                        storage=PersistentStorageDHT(),
+                        storage=PersistentStorageDHT(
+                            db_dir=self.db,
+                        ),
                         ksize=data["ksize"],
                         alpha=data["alpha"],
                         node_id=data["id"],
@@ -137,7 +155,6 @@ class DHT:
         ----------
         bootstrap_node_ip : str (optional)
             IP address of the bootstrap node to connect to.
-
         bootstrap_node_port : int (optional)
             Port number of the bootstrap node to connect to.
 
@@ -174,7 +191,7 @@ class DHT:
             self.loop.call_soon_threadsafe(self.loop.stop)
 
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=5)
+            self.thread.join(timeout=DHT_STARTUP_AND_SHUTDOWN_TIMEOUT)
             if self.thread.is_alive():
                 logger.error("DHT server thread did not shut down cleanly.")
             else:
@@ -201,7 +218,6 @@ class DHT:
         ----------
         infohash : str
             Infohash of the torrent to store the tracker entry for.
-
         value : TrackerDHTValue
             TrackerDHTValue object to store in the DHT.
 
@@ -225,7 +241,7 @@ class DHT:
                 self.server.set(key, value),
                 self.loop,
             )
-            res = future.result(timeout=5)
+            res = future.result(timeout=DHT_QUERY_TIMEOUT)
             if not res:
                 raise RuntimeError(f"Failed to store tracker entry for {infohash}")
             logger.info(f"Successfully stored tracker entry for {infohash}")
@@ -257,7 +273,7 @@ class DHT:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
-            value: bytes = future.result(timeout=5)
+            value: bytes = future.result(timeout=DHT_QUERY_TIMEOUT)
             if not value:
                 return None
             logger.info(f"Successfully retrieved tracker entry for {infohash}")
@@ -276,7 +292,6 @@ class DHT:
         ----------
         chunk_hash : str
             Chunk hash of the chunk to store the chunk entry for.
-
         value : ChunkDHTValue
             ChunkDHTValue object to store in the DHT.
 
@@ -300,7 +315,7 @@ class DHT:
                 self.server.set(key, value),
                 self.loop,
             )
-            res = future.result(timeout=5)
+            res = future.result(timeout=DHT_QUERY_TIMEOUT)
             if not res:
                 raise RuntimeError(f"Failed to store chunk entry for {chunk_hash}")
             logger.info(f"Successfully stored chunk entry for {chunk_hash}")
@@ -331,7 +346,7 @@ class DHT:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
-            value: bytes = future.result(timeout=5)
+            value: bytes = future.result(timeout=DHT_QUERY_TIMEOUT)
             if not value:
                 return None
             logger.info(f"Successfully retrieved chunk entry for {chunk_hash}")
@@ -350,7 +365,6 @@ class DHT:
         ----------
         piece_hash : str
             Piece hash of the piece to store the piece entry for.
-
         value : PieceDHTValue
             PieceDHTValue object to store in the DHT.
 
@@ -373,7 +387,7 @@ class DHT:
                 self.server.set(key, value),
                 self.loop,
             )
-            res = future.result(timeout=5)
+            res = future.result(timeout=DHT_QUERY_TIMEOUT)
             if not res:
                 raise RuntimeError(f"Failed to store piece entry for {piece_hash}")
             logger.info(f"Successfully stored piece entry for {piece_hash}")
@@ -405,7 +419,7 @@ class DHT:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
-            value: bytes = future.result(timeout=5)
+            value: bytes = future.result(timeout=DHT_QUERY_TIMEOUT)
             if not value:
                 return None
             logger.info(f"Successfully retrieved piece entry for {piece_hash}")

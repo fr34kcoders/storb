@@ -10,8 +10,7 @@ nodes.json
 object_store
 validator_database.db
 miner_database.db
-miner-dht.bin
-vali-dht.bin
+*.bin
 schema.sql
 
 # Byte-compiled / optimized / DLL files

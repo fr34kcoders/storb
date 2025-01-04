@@ -72,7 +72,7 @@ class Validator(Neuron):
 
         # TODO: have list of connected miners
 
-        self.db_dir = self.settings.validator.db_dir
+        self.db_dir = self.settings.db_dir
         self.query_timeout = self.settings.validator.query.timeout
 
         self.symmetric_keys: dict[int, tuple[str, str]] = {}
@@ -544,13 +544,13 @@ class Validator(Neuron):
                         )
                         raise HTTPException(
                             status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to verify signature for piece_id {piece_id}: {e}",
+                            detail="Failed to verify signature",
                         )
                 except Exception as e:
                     logger.error(f"Failed to get miner for piece_id {piece_id}: {e}")
                     raise HTTPException(
                         status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to get miner for piece_id {piece_id}: {e}",
+                        detail="Failed to get miner",
                     )
             multi_piece_meta.append(pieces_metadata)
 

@@ -18,12 +18,11 @@ MAX_UPLOAD_SIZE = 1 * 1024 * 1024 * 1024 * 1024  # 1 TiB
 EC_DATA_SIZE = 4
 EC_PARITY_SIZE = 2
 
+DHT_QUERY_TIMEOUT = 5
+DHT_STARTUP_AND_SHUTDOWN_TIMEOUT = 5
+
 # Default object store dir
 STORE_DIR = "object_store"
-
-# Default database dir
-DB_DIR = "validator_database.db"
-DHT_FILE = "vali-dht.bin"
 
 
 class LogColor(StrEnum):
@@ -31,10 +30,6 @@ class LogColor(StrEnum):
     GREEN = "\033[32m"
     BLUE = "\033[34m"
     BOLD = "\033[1m"
-
-
-# Default DHT port
-DHT_PORT = 6942
 
 
 class NeuronType(StrEnum):

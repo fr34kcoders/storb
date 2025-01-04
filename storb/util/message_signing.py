@@ -48,15 +48,15 @@ class PieceMessage(BaseModel):
 MessageType = Union[ChunkMessage, TrackerMessage, PieceMessage]
 
 
-def sign_message(message: MessageType, keypair) -> str:
-    """Sign a message with the wallet's hotkey.
+def sign_message(message: MessageType, hotkey_keypair: Keypair) -> str:
+    """Sign a message with the node's hotkey.
 
     Parameters
     ----------
-    message : bytes
-        The message in utf-8 encoding to be signed.
-    wallet : object
-        The wallet containing the hotkey for signing.
+    message : MessageType
+        The message to be signed.
+    hotkey_keypair : Keypair
+        The hotkey keypair to be used for signing.
 
     Returns
     -------
@@ -66,7 +66,7 @@ def sign_message(message: MessageType, keypair) -> str:
 
     message = message.model_dump_json()
     logger.debug(f"Signing message: {message}")
-    signature = keypair.sign(message).hex()
+    signature = hotkey_keypair.sign(message).hex()
     logger.debug(f"Signature: {signature}")
     return signature
 
@@ -80,8 +80,8 @@ def verify_message(
     ----------
     metagraph : object
         The metagraph containing hotkey information.
-    message : str
-        The message in utf-8 encoding whose signature needs to be verified.
+    message : MessageType
+        The message to be verified.
     signature : str
         The cryptographic signature to be verified.
     signer : int

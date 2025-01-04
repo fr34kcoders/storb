@@ -192,8 +192,8 @@ class Config:
         self._parser.add_argument(
             "--db_dir",
             type=str,
-            help="Directory of the validator database",
-            default=self.settings.validator.db_dir,
+            help="Directory of the database",
+            default=self.settings.db_dir,
         )
 
     def add_miner_args(self):
