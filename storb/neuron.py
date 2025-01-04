@@ -8,13 +8,12 @@ import uvicorn
 from fastapi import FastAPI
 from fiber.chain import chain_utils, interface, post_ip_to_chain
 from fiber.chain.metagraph import Metagraph
-from fiber.logging_utils import get_logger
 
 from storb import __spec_version__, get_spec_version
 from storb.config import Config
 from storb.constants import NeuronType
 from storb.dht.base_dht import DHT
-from storb.util.logging import setup_event_logger, setup_rotating_logger
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -95,11 +94,8 @@ class Neuron(ABC):
         )
         assert self.dht, "DHT must be initialised"
 
-        setup_rotating_logger(
-            logger_name="kademlia", log_level=pylog.DEBUG, max_size=LOG_MAX_SIZE
-        )
-
-        setup_event_logger(retention_size=LOG_MAX_SIZE)
+        get_logger("kademlia").setLevel(pylog.DEBUG)
+        get_logger("rpcudp").setLevel(pylog.DEBUG)
 
     @abstractmethod
     async def start(self): ...

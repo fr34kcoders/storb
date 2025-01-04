@@ -5,7 +5,8 @@ Provides utilities for accessing and managing the object store
 from pathlib import Path
 
 import aiofiles
-from fiber.logging_utils import get_logger
+
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 

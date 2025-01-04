@@ -6,9 +6,9 @@ from argparse import ArgumentParser
 from pathlib import Path
 
 from dynaconf import Dynaconf
-from fiber.logging_utils import get_logger
 
 from storb.constants import NeuronType
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -194,6 +194,13 @@ class Config:
             type=str,
             help="Directory of the database",
             default=self.settings.db_dir,
+        )
+
+        self._parser.add_argument(
+            "--log_level",
+            type=str,
+            help="Log level",
+            default=self.settings.log_level,
         )
 
     def add_miner_args(self):

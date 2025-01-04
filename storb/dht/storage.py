@@ -3,13 +3,13 @@ import threading
 import time
 from typing import Union
 
-from fiber.logging_utils import get_logger
 from kademlia.storage import IStorage
 
 from storb import db
 from storb.dht.chunk_dht import ChunkDHTValue
 from storb.dht.piece_dht import PieceDHTValue
 from storb.dht.tracker_dht import TrackerDHTValue
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -228,7 +228,7 @@ class PersistentStorageDHT(IStorage):
                         original_chunk_size=val.original_chunk_size,
                         signature=val.signature,
                     )
-                    logger.info(f"flushing chunk entry {entry} to disk")
+                    logger.debug(f"flushing chunk entry {entry} to disk")
                     await db.set_chunk_entry(conn, entry)
 
                 case "piece":
@@ -241,7 +241,7 @@ class PersistentStorageDHT(IStorage):
                         piece_type=val.piece_type,
                         signature=val.signature,
                     )
-                    logger.info(f"flushing piece entry {entry} to disk")
+                    logger.debug(f"flushing piece entry {entry} to disk")
                     await db.set_piece_entry(conn, entry)
 
                 case "tracker":
@@ -257,7 +257,7 @@ class PersistentStorageDHT(IStorage):
                         creation_timestamp=val.creation_timestamp,
                         signature=val.signature,
                     )
-                    logger.info(f"flushing tracker entry {entry} to disk")
+                    logger.debug(f"flushing tracker entry {entry} to disk")
                     await db.set_tracker_entry(conn, entry)
 
                 case _:

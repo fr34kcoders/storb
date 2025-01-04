@@ -1,8 +1,7 @@
 import asyncio
 import time
 
-from fiber.logging_utils import get_logger
-
+from storb.util.logging import get_logger
 from storb.validator import Validator
 
 logger = get_logger(__name__)

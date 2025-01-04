@@ -1,10 +1,10 @@
 from binascii import unhexlify
 from typing import Union
 
-from fiber.logging_utils import get_logger
 from pydantic import BaseModel
 from substrateinterface import Keypair
 
+from storb.util.logging import get_logger
 from storb.util.piece import PieceType
 
 logger = get_logger(__name__)

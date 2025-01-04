@@ -1,9 +1,10 @@
+from colorama import Fore, Style
 from fastapi import HTTPException
-from fiber.logging_utils import get_logger
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 
-from storb.constants import MAX_UPLOAD_SIZE, LogColor
+from storb.constants import MAX_UPLOAD_SIZE
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -13,7 +14,7 @@ class LoggerMiddleware(BaseHTTPMiddleware):
         """Logging middleware - pretty colors for logging"""
 
         logger.info(
-            f"{LogColor.BOLD}{LogColor.GREEN}Request{LogColor.RESET}: {LogColor.BOLD}{LogColor.BLUE}{request.method}{LogColor.RESET} {request.url}"
+            f"{Style.BRIGHT}{Fore.GREEN}Request{Style.RESET_ALL}: {Style.BRIGHT}{Fore.BLUE}{request.method}{Style.RESET_ALL} {request.url}"
         )
         response = await call_next(request)
         return response

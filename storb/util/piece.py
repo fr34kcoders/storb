@@ -4,7 +4,6 @@ import typing
 from collections.abc import Iterator
 from enum import IntEnum
 
-from fiber.logging_utils import get_logger
 from pydantic import BaseModel, Field
 from zfec.easyfec import Decoder, Encoder
 
@@ -14,6 +13,7 @@ from storb.constants import (
     PIECE_LENGTH_OFFSET,
     PIECE_LENGTH_SCALING,
 )
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 
