@@ -12,7 +12,6 @@ from fiber import Keypair, utils
 from fiber import constants as fcst
 from fiber.chain import chain_utils, interface, signatures
 from fiber.chain.metagraph import Metagraph
-from fiber.logging_utils import get_logger
 from fiber.miner.core.configuration import Config
 from fiber.miner.security import nonce_management
 from fiber.validator.generate_nonce import generate_nonce
@@ -20,6 +19,7 @@ from pydantic import BaseModel
 
 from storb.config import Config as StorbConfig
 from storb.constants import QUERY_TIMEOUT
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 

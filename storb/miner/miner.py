@@ -7,13 +7,13 @@ from fastapi.responses import StreamingResponse
 from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
-from fiber.logging_utils import get_logger
 from fiber.miner.dependencies import blacklist_low_stake, verify_request
 
 from storb import protocol
 from storb.constants import NeuronType
 from storb.dht.piece_dht import PieceDHTValue
 from storb.neuron import Neuron
+from storb.util.logging import get_logger
 from storb.util.message_signing import PieceMessage, sign_message
 from storb.util.middleware import LoggerMiddleware
 from storb.util.piece import piece_hash
@@ -121,7 +121,7 @@ class Miner(Neuron):
         piece_info = protocol.Store.model_validate_json(json_data)
         piece_bytes = await file.read()
         piece_id = piece_hash(piece_bytes)
-        logger.info(
+        logger.debug(
             f"ptype: {piece_info.piece_type} | piece preview: {piece_bytes[:10]} | hash: {piece_id}"
         )
 
@@ -165,7 +165,7 @@ class Miner(Neuron):
     async def get_piece(self, request: protocol.Retrieve):
         """Returns a piece from storage as JSON metadata and a file."""
         logger.info("Retrieving piece...")
-        logger.info(f"piece_id to retrieve: {request.piece_id}")
+        logger.debug(f"piece_id to retrieve: {request.piece_id}")
 
         # Fetch the piece from storage
         piece = await self.object_store.read(request.piece_id)

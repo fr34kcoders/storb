@@ -1,9 +1,9 @@
 from fastapi import HTTPException
-from fiber.logging_utils import get_logger
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 
 from storb.constants import MAX_UPLOAD_SIZE, LogColor
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 

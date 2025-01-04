@@ -15,6 +15,7 @@ from storb.dht.chunk_dht import ChunkDHTValue
 from storb.dht.piece_dht import PieceDHTValue
 from storb.dht.storage import PersistentStorageDHT, build_store_key
 from storb.dht.tracker_dht import TrackerDHTValue
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 

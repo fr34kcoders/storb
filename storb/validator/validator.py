@@ -19,7 +19,6 @@ from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
 from fiber.encrypted.validator import handshake
-from fiber.logging_utils import get_logger
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
@@ -38,6 +37,7 @@ from storb.dht.piece_dht import PieceDHTValue
 from storb.dht.tracker_dht import TrackerDHTValue
 from storb.neuron import Neuron
 from storb.util.infohash import generate_infohash
+from storb.util.logging import get_logger
 from storb.util.message_signing import (
     ChunkMessage,
     PieceMessage,
@@ -292,20 +292,20 @@ class Validator(Neuron):
                     self.ret_latency_scores = new_ret_latency_scores
                     self.final_latency_scores = new_final_latency_scores
                     # TODO: use debug for these
-                    logger.info(f"(len: {len(self.scores)}) New scores: {self.scores}")
-                    logger.info(
+                    logger.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
+                    logger.debug(
                         f"(len: {len(self.store_latencies)}) New store latencies: {self.store_latencies}"
                     )
-                    logger.info(
+                    logger.debug(
                         f"(len: {len(self.retrieve_latencies)}) New retrieve latencies: {self.retrieve_latencies}"
                     )
-                    logger.info(
+                    logger.debug(
                         f"(len: {len(self.store_latency_scores)}) New store latency scores: {self.store_latency_scores}"
                     )
-                    logger.info(
+                    logger.debug(
                         f"(len: {len(self.retrieve_latency_scores)}) New retrieve latency scores: {self.retrieve_latency_scores}"
                     )
-                    logger.info(
+                    logger.debug(
                         f"(len: {len(self.final_latency_scores)}) New latency scores: {self.final_latency_scores}"
                     )
 
@@ -351,7 +351,7 @@ class Validator(Neuron):
             scattered_rewards: np.ndarray = np.zeros_like(self.scores)
             scattered_rewards[uids_array] = rewards
             # TODO: change some of these logging levels back to "debug"
-            logger.info(f"Scattered rewards: {rewards}")
+            logger.debug(f"Scattered rewards: {rewards}")
 
             # Update scores with rewards produced by this step.
             # shape: [ metagraph.n ]
@@ -388,8 +388,8 @@ class Validator(Neuron):
         weights_uids = [node.node_id for node in self.metagraph.nodes.values()]
 
         # TODO: change these to be debug
-        logger.info(f"weights: {raw_weights}")
-        logger.info(f"weights_uids: {weights_uids}")
+        logger.debug(f"weights: {raw_weights}")
+        logger.debug(f"weights_uids: {weights_uids}")
         # Set the weights
         result = set_node_weights(
             substrate=self.metagraph.substrate,
@@ -1029,10 +1029,9 @@ class Validator(Neuron):
                         # Remove them from the buffer
                         del buffer[:chunk_size]
 
-                        print(
-                            "len chunk:",
+                        logger.debug(
+                            "len chunk: %d, chunk size: %d",
                             len(chunk_buffer),
-                            "chunk size:",
                             chunk_size,
                         )
 
@@ -1141,8 +1140,7 @@ class Validator(Neuron):
                 ),
             )
 
-            logger.info(f"Generated {len(piece_hashes)} unique pieces")
-            logger.info(f"Uploaded file with infohash: {infohash}")
+            logger.debug(f"Uploaded file with infohash: {infohash}")
             return protocol.StoreResponse(infohash=infohash)
 
         except HTTPException as e:
@@ -1185,7 +1183,7 @@ class Validator(Neuron):
 
         try:
             signature = tracker_dht.signature
-            logger.info(f"signature: {signature}")
+            logger.debug(f"signature: {signature}")
             if not verify_message(
                 self.metagraph, message, signature, message.validator_id
             ):
