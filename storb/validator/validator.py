@@ -402,6 +402,11 @@ class Validator(Neuron):
             max_attempts=2,
         )
 
+        if result:
+            logger.info("🏋️ Set weights successfully!")
+        else:
+            logger.error("Failed to set weights 🙁 - perhaps it is too soon?")
+
     @override
     def run(self):
         """Background task to sync metagraph"""
@@ -883,7 +888,7 @@ class Validator(Neuron):
         alpha: float = self.settings.neuron.response_time_alpha
         self.store_latencies = (alpha * latencies) + (1 - alpha) * self.store_latencies
         self.store_latency_scores = 1 - (
-            self.retrieve_latencies / self.store_latencies.max()
+            self.store_latencies / self.store_latencies.max()
         )
 
         # update miner stats table in db
