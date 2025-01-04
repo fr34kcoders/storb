@@ -1,6 +1,7 @@
 import threading
 import uuid
 
+import uvicorn
 from fastapi import Form, UploadFile
 from fastapi.responses import StreamingResponse
 from fiber.encrypted.miner.endpoints.handshake import (
@@ -13,7 +14,7 @@ from storb import protocol
 from storb.constants import NeuronType
 from storb.dht.piece_dht import PieceDHTValue
 from storb.neuron import Neuron
-from storb.util.message_signing import sign_message, PieceMessage
+from storb.util.message_signing import PieceMessage, sign_message
 from storb.util.middleware import LoggerMiddleware
 from storb.util.piece import piece_hash
 from storb.util.query import factory_app
@@ -86,6 +87,11 @@ class Miner(Neuron):
         )
 
         self.app.include_router(get_subnet_router())
+
+        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.settings.api_port)
+        self.server = uvicorn.Server(config)
+
+        assert self.server, "Uvicorn server must be initialised"
 
     """API routes"""
 

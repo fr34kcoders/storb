@@ -10,6 +10,7 @@ from typing import AsyncGenerator, Literal, override
 
 import httpx
 import numpy as np
+import uvicorn
 from fastapi import Body, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fiber.chain import interface
@@ -160,6 +161,11 @@ class Validator(Neuron):
 
         self.app.include_router(get_subnet_router())
 
+        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.settings.api_port)
+        self.server = uvicorn.Server(config)
+
+        assert self.server, "Uvicorn server must be initialised"
+
     async def perform_handshakes(self):
         logger.info("Performing handshakes with nodes...")
         for node_hotkey, node in self.metagraph.nodes.items():
@@ -211,6 +217,7 @@ class Validator(Neuron):
             # TODO: are the nodes in order by ascending uid?
             old_hotkeys = list(self.metagraph.nodes.keys())
             self.metagraph.sync_nodes()
+            self.metagraph.save_nodes()
             logger.info("Metagraph synced successfully")
             # Check if the metagraph axon info has changed.
             if previous_metagraph_nodes == self.metagraph.nodes:

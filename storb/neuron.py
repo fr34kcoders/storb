@@ -36,10 +36,7 @@ class Neuron(ABC):
         # Miners and validators must set these themselves
         self.app: FastAPI = None
 
-        config = uvicorn.Config(self.app, host="0.0.0.0", port=self.settings.api_port)
-        self.server = uvicorn.Server(config)
         self.httpx_client = httpx.AsyncClient()
-        assert self.server, "Uvicorn server must be initialised"
         assert self.httpx_client, "HTTPX client must be initialised"
 
         self.api_port: int = self.settings.api_port
@@ -158,6 +155,7 @@ class Neuron(ABC):
                 subtensor_address=self.substrate.url
             )
             self.metagraph.sync_nodes()
+            self.metagraph.save_nodes()
 
             logger.info("Metagraph synced successfully")
         except Exception as e:
