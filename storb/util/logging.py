@@ -2,7 +2,7 @@ import logging
 import os
 import sys
 from enum import StrEnum
-from typing import List, Optional
+from typing import Optional
 
 from colorama import Back, Fore, Style, init
 
@@ -80,7 +80,7 @@ def get_logger(
     name: str,
     log_format: Optional[str] = None,
     date_format: Optional[str] = None,
-    handlers: Optional[List[logging.Handler]] = None,
+    handlers: Optional[list[logging.Handler]] = None,
 ) -> logging.Logger:
     """Initializes and returns a logger with the specified configurations,
     reading the log level from the environment variable LOG_LEVEL.
@@ -93,7 +93,7 @@ def get_logger(
         Custom format string for log messages. If not provided, a default format is used.
     date_format: Optional[str]
         Custom date format string. If not provided, defaults to "%Y-%m-%d %H:%M:%S".
-    handlers: Optional[List[logging.Handler]]
+    handlers: Optional[list[logging.Handler]]
         A list of logging handlers to attach to the logger. If not provided, a StreamHandler is used.
 
     Returns

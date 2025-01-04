@@ -25,13 +25,6 @@ DHT_STARTUP_AND_SHUTDOWN_TIMEOUT = 5
 STORE_DIR = "object_store"
 
 
-class LogColor(StrEnum):
-    RESET = "\033[0m"
-    GREEN = "\033[32m"
-    BLUE = "\033[34m"
-    BOLD = "\033[1m"
-
-
 class NeuronType(StrEnum):
     Base = "base"
     Miner = "miner"
