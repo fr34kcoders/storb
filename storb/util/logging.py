@@ -19,8 +19,12 @@ class LogLevel(StrEnum):
 
     @property
     def level(self) -> int:
-        """
-        Maps the LogLevel enum to the corresponding logging module constant.
+        """Maps the LogLevel enum to the corresponding logging module constant.
+
+        Returns
+        -------
+        int
+            The logging module constant for the log level.
         """
         return {
             LogLevel.DEBUG: logging.DEBUG,
@@ -32,9 +36,7 @@ class LogLevel(StrEnum):
 
 
 class ColoredFormatter(logging.Formatter):
-    """
-    Custom logging formatter to add colors based on log level.
-    """
+    """Custom logging formatter to add colors based on log level."""
 
     LEVEL_COLORS = {
         LogLevel.DEBUG: Fore.CYAN,
@@ -80,21 +82,24 @@ def get_logger(
     date_format: Optional[str] = None,
     handlers: Optional[List[logging.Handler]] = None,
 ) -> logging.Logger:
-    """
-    Initializes and returns a logger with the specified configurations,
+    """Initializes and returns a logger with the specified configurations,
     reading the log level from the environment variable LOG_LEVEL.
 
-    Args:
-        name (str): The name of the logger.
-        log_format (Optional[str]): Custom format string for log messages.
-                                    If not provided, a default format is used.
-        date_format (Optional[str]): Custom date format string.
-                                     If not provided, defaults to "%Y-%m-%d %H:%M:%S".
-        handlers (Optional[List[logging.Handler]]): A list of logging handlers to attach to the logger.
-                                                   If not provided, a StreamHandler is used.
+    Parameters
+    ----------
+    name: str
+        The name of the logger.
+    log_format: Optional[str]
+        Custom format string for log messages. If not provided, a default format is used.
+    date_format: Optional[str]
+        Custom date format string. If not provided, defaults to "%Y-%m-%d %H:%M:%S".
+    handlers: Optional[List[logging.Handler]]
+        A list of logging handlers to attach to the logger. If not provided, a StreamHandler is used.
 
-    Returns:
-        logging.Logger: Configured logger instance.
+    Returns
+    -------
+    logging.Logger
+        Configured logger instance.
     """
     # Retrieve log level from environment variable, default to INFO
     env_log_level = os.getenv("LOG_LEVEL", "INFO").upper()
