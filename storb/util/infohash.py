@@ -1,11 +1,5 @@
 import hashlib
 import json
-from dataclasses import dataclass
-
-
-# TODO
-@dataclass
-class Infohash: ...
 
 
 def generate_infohash(

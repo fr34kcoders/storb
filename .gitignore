@@ -9,6 +9,9 @@ nodes.json
 # Databases and stores
 object_store
 validator_database.db
+miner_database.db
+*.bin
+schema.sql
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

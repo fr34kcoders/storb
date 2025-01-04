@@ -182,6 +182,20 @@ class Config:
             default=self.settings.dht.bootstrap.port,
         )
 
+        self._parser.add_argument(
+            "--dht.file",
+            type=str,
+            help="File for the DHT to save state.",
+            default=self.settings.dht.file,
+        )
+
+        self._parser.add_argument(
+            "--db_dir",
+            type=str,
+            help="Directory of the database",
+            default=self.settings.db_dir,
+        )
+
     def add_miner_args(self):
         self._parser.add_argument(
             "--store_dir",
@@ -196,13 +210,6 @@ class Config:
             help="If you want to run a synthetic validator",
             action="store_true",
             default=self.settings.validator.synthetic,
-        )
-
-        self._parser.add_argument(
-            "--db_dir",
-            type=str,
-            help="Directory of the validator database",
-            default=self.settings.validator.db_dir,
         )
 
         self._parser.add_argument(

@@ -31,7 +31,7 @@ def test_split_data():
     for chunk_idx, chunk in enumerate(iter(lambda: file.file.read(chunk_size), b"")):
         chunk_info = encode_chunk(chunk, chunk_idx)
         chunks.append(chunk_info.copy(exclude={"blocks"}))
-        piece_size = piece_length(chunk_info.original_chunk_length)
+        piece_size = piece_length(chunk_info.original_chunk_size)
         pieces_per_block = math.ceil(chunk_info.chunk_size / piece_size)
         num_pieces = chunk_info.m * pieces_per_block
         expected_pieces += num_pieces
@@ -61,7 +61,7 @@ def test_reconstruct_data():
     for chunk_idx, chunk in enumerate(iter(lambda: file.file.read(chunk_size), b"")):
         chunk_info = encode_chunk(chunk, chunk_idx)
         chunks.append(chunk_info.copy(exclude={"blocks"}))
-        piece_size = piece_length(chunk_info.original_chunk_length)
+        piece_size = piece_length(chunk_info.original_chunk_size)
         pieces_per_block = math.ceil(chunk_info.chunk_size / piece_size)
         num_pieces = chunk_info.m * pieces_per_block
         expected_pieces += num_pieces
@@ -96,7 +96,7 @@ def test_reconstruct_data_corrupted():
     for chunk_idx, chunk in enumerate(iter(lambda: file.file.read(chunk_size), b"")):
         chunk_info = encode_chunk(chunk, chunk_idx)
         chunks.append(chunk_info.copy(exclude={"blocks"}))
-        piece_size = piece_length(chunk_info.original_chunk_length)
+        piece_size = piece_length(chunk_info.original_chunk_size)
         pieces_per_block = math.ceil(chunk_info.chunk_size / piece_size)
         num_pieces = chunk_info.m * pieces_per_block
         expected_pieces += num_pieces

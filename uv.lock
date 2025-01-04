@@ -426,18 +426,6 @@ wheels = [
 ]
 
 [[package]]
-name = "kademlia"
-version = "2.2.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "rpcudp" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5e/85/5e54903d20e3ff7aa7a6a1d7be289b254a67a18cc7f94b7cdfeacf10af69/kademlia-2.2.2.tar.gz", hash = "sha256:22928c2e92544c7223ed5905c42bfea291336851beec7de436af4ca41ac0d8eb", size = 16908 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/11/1d/8d151cc631bd6e1590aab5e5f5c4643ebe43db51dc70121ea0819af94077/kademlia-2.2.2-py3-none-any.whl", hash = "sha256:47696d2e75d60d71eda47fe2e21a96312b0a05f850f9a6910073b5cd79494d0e", size = 20353 },
-]
-
-[[package]]
 name = "markdown-it-py"
 version = "3.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -885,12 +873,12 @@ dependencies = [
     { name = "fastapi" },
     { name = "fiber" },
     { name = "httpx" },
-    { name = "kademlia" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "rich" },
     { name = "starlette" },
+    { name = "storb-kademlia" },
     { name = "substrate-interface" },
     { name = "uvicorn" },
     { name = "zfec" },
@@ -914,12 +902,12 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.112.0" },
     { name = "fiber", git = "https://github.com/fr34kcoders/fiber.git" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "kademlia", specifier = ">=2.2.2" },
     { name = "numpy", specifier = "==2.0.2" },
     { name = "pydantic", specifier = ">=2.9.2" },
     { name = "python-multipart", specifier = ">=0.0.19" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "starlette", specifier = "==0.37.2" },
+    { name = "storb-kademlia", git = "https://github.com/fr34kcoders/storb-kademlia.git" },
     { name = "substrate-interface", specifier = ">=1.7.10" },
     { name = "uvicorn", specifier = "==0.30.5" },
     { name = "zfec", specifier = ">=1.6.0.0" },
@@ -931,6 +919,14 @@ dev = [
     { name = "py-spy", specifier = ">=0.4.0" },
     { name = "pytest", specifier = ">=8.3.4" },
     { name = "ruff", specifier = ">=0.8.2" },
+]
+
+[[package]]
+name = "storb-kademlia"
+version = "0.1.0"
+source = { git = "https://github.com/fr34kcoders/storb-kademlia.git#562117f4721a8fdfbe04f216686dc8203d85a290" }
+dependencies = [
+    { name = "rpcudp" },
 ]
 
 [[package]]

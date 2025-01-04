@@ -8,7 +8,6 @@ import typing
 from datetime import UTC, datetime
 from typing import AsyncGenerator, Literal, override
 
-import aiosqlite
 import httpx
 import numpy as np
 from fastapi import Body, File, HTTPException, UploadFile
@@ -26,17 +25,25 @@ from starlette.status import (
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
 
-import storb.validator.db as db
+import storb.db as db
 from storb import protocol
 from storb.constants import (
     NUM_UIDS_QUERY,
     QUERY_TIMEOUT,
     NeuronType,
 )
-from storb.dht.piece_dht import ChunkDHTValue, PieceDHTValue
+from storb.dht.chunk_dht import ChunkDHTValue
+from storb.dht.piece_dht import PieceDHTValue
 from storb.dht.tracker_dht import TrackerDHTValue
 from storb.neuron import Neuron
 from storb.util.infohash import generate_infohash
+from storb.util.message_signing import (
+    ChunkMessage,
+    PieceMessage,
+    TrackerMessage,
+    sign_message,
+    verify_message,
+)
 from storb.util.middleware import FileSizeMiddleware, LoggerMiddleware
 from storb.util.piece import (
     EncodedChunk,
@@ -65,7 +72,7 @@ class Validator(Neuron):
 
         # TODO: have list of connected miners
 
-        self.db_dir = self.settings.validator.db_dir
+        self.db_dir = self.settings.db_dir
         self.query_timeout = self.settings.validator.query.timeout
 
         self.symmetric_keys: dict[int, tuple[str, str]] = {}
@@ -128,13 +135,6 @@ class Validator(Neuron):
         self.app.add_api_route(
             "/metadata",
             self.get_metadata,
-            methods=["GET"],
-            response_model=protocol.MetadataResponse,
-        )
-
-        self.app.add_api_route(
-            "/metadata/dht",
-            self.get_metadata_dht,
             methods=["GET"],
             response_model=protocol.MetadataResponse,
         )
@@ -440,8 +440,7 @@ class Validator(Neuron):
         file based on its infohash.
 
         This method looks up all piece IDs associated with the provided infohash
-        from a local tracker database, and then retrieves the corresponding miner
-        IDs from the DHT. If no pieces are found, an HTTP 404 error is raised.
+        from the DHT. If no pieces are found, an HTTP 404 error is raised.
         If the lookup for any piece's miner fails, an HTTP 500 error is raised.
 
         Parameters
@@ -463,37 +462,95 @@ class Validator(Neuron):
         """
 
         infohash = request.infohash
+        tracker_data = await self.dht.get_tracker_entry(infohash)
+        if tracker_data is None:
+            raise HTTPException(
+                status_code=HTTP_404_NOT_FOUND,
+                detail="No tracker entry found for the given infohash",
+            )
 
-        chunk_ids = []
+        try:
+            signature = tracker_data.signature
+            message = TrackerMessage(
+                infohash=tracker_data.infohash,
+                validator_id=tracker_data.validator_id,
+                filename=tracker_data.filename,
+                length=tracker_data.length,
+                chunk_size=tracker_data.chunk_size,
+                chunk_count=tracker_data.chunk_count,
+                chunk_hashes=tracker_data.chunk_hashes,
+                creation_timestamp=tracker_data.creation_timestamp,
+            )
+            logger.info(f"hotkeys: {self.metagraph}")
+            if not verify_message(
+                self.metagraph, message, signature, message.validator_id
+            ):
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Signature verification failed for tracker entry",
+                )
+        except AttributeError:
+            logger.error(
+                f"Tracker entry {infohash} does not contain a signature attribute"
+            )
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Tracker entry {infohash} does not contain a signature attribute",
+            )
+
+        chunk_ids = tracker_data.chunk_hashes
         chunks_metadatas = []
         multi_piece_meta = []
 
-        async with db.get_db_connection(db_dir=self.db_dir) as conn:
-            # TODO: erm we shouldn't need to access the array of chunk ids like this?
-            # something might be wrong with get_chunks_from_infohash()
-            chunk_ids = (await db.get_chunks_from_infohash(conn, infohash))["chunk_ids"]
-
-        if chunk_ids is None:
-            raise HTTPException(
-                status_code=HTTP_404_NOT_FOUND,
-                detail="No chunks found for the given infohash",
-            )
-
         for chunk_id in chunk_ids:
-            piece_ids = None
             chunks_metadata = await self.dht.get_chunk_entry(chunk_id)
+            if chunks_metadata is None:
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to get chunk for chunk_id {chunk_id}",
+                )
             chunks_metadatas.append(chunks_metadata)
             piece_ids = chunks_metadata.piece_hashes
             pieces_metadata: list[PieceDHTValue] = []
             for piece_id in piece_ids:
                 try:
                     piece = await self.dht.get_piece_entry(piece_id)
-                    pieces_metadata.append(piece)
+                    logger.info(f"piece: {piece}")
+                    try:
+                        signature = piece.signature
+                        # create message object excluding the signature
+                        message = PieceMessage(
+                            piece_hash=piece_id,
+                            miner_id=piece.miner_id,
+                            chunk_idx=piece.chunk_idx,
+                            piece_idx=piece.piece_idx,
+                            piece_type=piece.piece_type,
+                        )
+                        # verify the signature
+                        if not verify_message(
+                            self.metagraph, message, signature, piece.miner_id
+                        ):
+                            logger.error(
+                                f"Signature verification failed for piece_id {piece_id}"
+                            )
+                            raise HTTPException(
+                                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=f"Signature verification failed for piece_id {piece_id}",
+                            )
+                        pieces_metadata.append(piece)
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to verify signature for piece_id {piece_id}: {e}"
+                        )
+                        raise HTTPException(
+                            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to verify signature",
+                        )
                 except Exception as e:
                     logger.error(f"Failed to get miner for piece_id {piece_id}: {e}")
                     raise HTTPException(
                         status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to get miner for piece_id {piece_id}: {e}",
+                        detail="Failed to get miner",
                     )
             multi_piece_meta.append(pieces_metadata)
 
@@ -602,56 +659,6 @@ class Validator(Neuron):
         self.update_scores(rewards, response_rate_uids)
 
         await asyncio.sleep(5)
-
-    async def store_in_dht(
-        self,
-        validator_id: int,
-        infohash: str,
-        filename: str,
-        filesize: int,
-        piece_size: int,
-        piece_count: int,
-    ):
-        """Asynchronously stores tracker entry information in a Distributed Hash Table (DHT).
-
-        Parameters
-        ----------
-        validator_id : int
-            The ID of the validator.
-        infohash : str
-            The infohash of the file.
-        filename : str
-            The name of the file.
-        filesize : int
-            The size of the file in bytes.
-        piece_size : int
-            The size of each piece in bytes.
-        piece_count : int
-            The number of pieces the file is divided into.
-
-        Raises
-        ------
-        HTTPException
-            If storing the tracker entry in the DHT fails.
-        """
-
-        try:
-            await self.dht.store_tracker_entry(
-                infohash,
-                TrackerDHTValue(
-                    validator_id=validator_id,
-                    filename=filename,
-                    length=filesize,
-                    piece_length=piece_size,
-                    piece_count=piece_count,
-                    parity_count=2,
-                ),
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to store tracker entry in DHT: {e}",
-            )
 
     async def query_miner(
         self,
@@ -889,37 +896,6 @@ class Validator(Neuron):
         return "Hello from Storb!"
 
     async def get_metadata(self, infohash: str) -> protocol.MetadataResponse:
-        """Get file metadata from the local validator database
-
-        Parameters
-        ----------
-        infohash : str
-            The infohash of the file
-
-        Returns
-        -------
-        protocol.MetadataResponse
-        """
-
-        try:
-            async with db.get_db_connection(db_dir=self.db_dir) as conn:
-                metadata = await db.get_metadata(conn, infohash)
-
-                if metadata is None:
-                    # Raise a 404 error if no metadata is found for the given infohash
-                    raise HTTPException(status_code=404, detail="Metadata not found")
-
-                return protocol.MetadataResponse(**metadata)
-
-        except aiosqlite.OperationalError as e:
-            # Handle database-related errors
-            raise HTTPException(status_code=500, detail=f"Database error: {e}")
-
-        except Exception as e:
-            # Catch any other unexpected errors
-            raise HTTPException(status_code=500, detail=f"Unexpected error: {e}")
-
-    async def get_metadata_dht(self, infohash: str) -> protocol.MetadataResponse:
         """Get file metadata from the DHT
 
         Parameters
@@ -934,11 +910,34 @@ class Validator(Neuron):
         logger.info(f"Retrieving metadata for infohash: {infohash}")
         try:
             metadata = await self.dht.get_tracker_entry(infohash)
+            try:
+                signature = metadata.signature
+                message = TrackerMessage(
+                    infohash=metadata.infohash,
+                    validator_id=metadata.validator_id,
+                    filename=metadata.filename,
+                    length=metadata.length,
+                    chunk_size=metadata.chunk_size,
+                    chunk_count=metadata.chunk_count,
+                    chunk_hashes=metadata.chunk_hashes,
+                    creation_timestamp=metadata.creation_timestamp,
+                )
+                if not verify_message(self.metagraph, message, signature, self.uid):
+                    raise HTTPException(
+                        status_code=HTTP_400_BAD_REQUEST, detail="Invalid signature"
+                    )
+            except Exception as e:
+                logger.error(f"Error verifying signature: {e}")
+                raise HTTPException(
+                    status_code=HTTP_400_BAD_REQUEST,
+                    detail="Metadata does not contain a signature",
+                )
+
             return protocol.MetadataResponse(
                 infohash=infohash,
                 filename=metadata.filename,
                 timestamp=metadata.creation_timestamp,
-                piece_length=metadata.piece_length,
+                chunk_size=metadata.chunk_size,
                 length=metadata.length,
             )
         except Exception as e:
@@ -974,7 +973,6 @@ class Validator(Neuron):
 
             # TODO: Consider miner scores for selection, and not just their availability
             hotkeys = get_random_hotkeys(self, NUM_UIDS_QUERY)
-            logger.debug(f"hotkeys to query: {hotkeys}")
 
             chunk_hashes = []
             piece_hashes = set()
@@ -1032,18 +1030,43 @@ class Validator(Neuron):
                         )
 
                         dht_chunk = ChunkDHTValue(
+                            validator_id=validator_id,
                             piece_hashes=sent_piece_hashes,
                             chunk_idx=encoded_chunk.chunk_idx,
                             k=encoded_chunk.k,
                             m=encoded_chunk.m,
                             chunk_size=encoded_chunk.chunk_size,
                             padlen=encoded_chunk.padlen,
-                            original_chunk_length=encoded_chunk.original_chunk_length,
+                            original_chunk_size=encoded_chunk.original_chunk_size,
                         )
 
                         chunk_hash = hashlib.sha1(
                             dht_chunk.model_dump_json().encode("utf-8")
                         ).hexdigest()
+
+                        dht_chunk.chunk_hash = chunk_hash
+
+                        message = ChunkMessage(
+                            chunk_hash=dht_chunk.chunk_hash,
+                            validator_id=dht_chunk.validator_id,
+                            piece_hashes=dht_chunk.piece_hashes,
+                            chunk_idx=dht_chunk.chunk_idx,
+                            k=dht_chunk.k,
+                            m=dht_chunk.m,
+                            chunk_size=dht_chunk.chunk_size,
+                            padlen=dht_chunk.padlen,
+                            original_chunk_size=dht_chunk.original_chunk_size,
+                        )
+
+                        try:
+                            signature = sign_message(message, self.keypair)
+                            dht_chunk.signature = signature
+                        except Exception as e:
+                            logger.error(f"Error signing chunk: {e}")
+                            raise HTTPException(
+                                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="Error signing chunk",
+                            )
 
                         await self.dht.store_chunk_entry(chunk_hash, dht_chunk)
 
@@ -1070,32 +1093,39 @@ class Validator(Neuron):
                 filename, timestamp, chunk_size, filesize, list(piece_hashes)
             )
 
-            # Store infohash and metadata in the database
+            message = TrackerMessage(
+                infohash=infohash,
+                validator_id=validator_id,
+                filename=filename,
+                length=filesize,
+                chunk_size=chunk_size,
+                chunk_count=len(chunk_hashes),
+                chunk_hashes=chunk_hashes,
+                creation_timestamp=timestamp,
+            )
+
             try:
-                async with db.get_db_connection(db_dir=self.db_dir) as conn:
-                    await db.store_infohash_chunk_ids(conn, infohash, chunk_hashes)
-            except aiosqlite.OperationalError as e:
-                raise HTTPException(
-                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Database error: {e}",
-                )
+                signature = sign_message(message, self.keypair)
             except Exception as e:
+                logger.error(f"Error signing tracker message: {e}")
                 raise HTTPException(
                     status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Unexpected database error: {e}",
+                    detail="Error signing tracker message",
                 )
 
             # Store data object metadata in the DHT
             await self.dht.store_tracker_entry(
                 infohash,
                 TrackerDHTValue(
+                    infohash=infohash,
                     validator_id=validator_id,
                     filename=filename,
                     length=filesize,
-                    chunk_length=chunk_size,
+                    chunk_size=chunk_size,
                     chunk_count=len(chunk_hashes),
                     chunk_hashes=chunk_hashes,
                     creation_timestamp=timestamp,
+                    signature=signature,
                 ),
             )
 
@@ -1124,16 +1154,63 @@ class Validator(Neuron):
 
         # Get validator ID from tracker DHT given the infohash
         tracker_dht = await self.dht.get_tracker_entry(infohash)
+        if not tracker_dht:
+            raise HTTPException(
+                status_code=HTTP_404_NOT_FOUND,
+                detail="No tracker entry found for the given infohash",
+            )
+
+        message = TrackerMessage(
+            infohash=tracker_dht.infohash,
+            validator_id=tracker_dht.validator_id,
+            filename=tracker_dht.filename,
+            length=tracker_dht.length,
+            chunk_size=tracker_dht.chunk_size,
+            chunk_count=tracker_dht.chunk_count,
+            chunk_hashes=tracker_dht.chunk_hashes,
+            creation_timestamp=tracker_dht.creation_timestamp,
+        )
+
+        try:
+            signature = tracker_dht.signature
+            logger.info(f"signature: {signature}")
+            if not verify_message(
+                self.metagraph, message, signature, message.validator_id
+            ):
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Signature verification failed for tracker entry",
+                )
+        except Exception as e:
+            logger.error(e)
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Signature verification failed for tracker entry",
+            )
+
         validator_to_ask = tracker_dht.validator_id
         validator_hotkey = list(self.metagraph.nodes.keys())[validator_to_ask]
 
         synapse = protocol.GetMiners(infohash=infohash)
         payload = Payload(data=synapse)
-        _, recv_payload = await self.query_miner(
-            miner_hotkey=validator_hotkey,
-            endpoint="/miners",
-            payload=payload,
-        )
+
+        try:
+            _, recv_payload = await self.query_miner(
+                miner_hotkey=validator_hotkey,
+                endpoint="/miners",
+                payload=payload,
+            )
+            if not recv_payload:
+                raise HTTPException(
+                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="No response from miner",
+                )
+        except Exception as e:
+            logger.error(e)
+            raise HTTPException(
+                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error querying miner",
+            )
 
         response = recv_payload.data
 
@@ -1157,7 +1234,7 @@ class Validator(Neuron):
                 m=chunks_metadata.m,
                 chunk_size=chunks_metadata.chunk_size,
                 padlen=chunks_metadata.padlen,
-                original_chunk_length=chunks_metadata.original_chunk_length,
+                original_chunk_size=chunks_metadata.original_chunk_size,
             )
             chunks.append(chunk)
 
@@ -1205,9 +1282,9 @@ class Validator(Neuron):
             elif not recv_payload.file:
                 continue
 
-            piece = recv_payload.file
+            piece_data = recv_payload.file
 
-            piece_id = piece_hash(piece)
+            piece_id = piece_hash(piece_data)
             # TODO: do we want to go through all the pieces/uids before returning the error?
             # perhaps we can return an error response, and after we can continue scoring the
             # miners in the background?
@@ -1228,13 +1305,13 @@ class Validator(Neuron):
             else:
                 miner_stats[miner_uid]["retrieval_successes"] += 1
                 miner_stats[miner_uid]["total_successes"] += 1
-                latencies[miner_uid] = recv_payload.time_elapsed / len(piece)
+                latencies[miner_uid] = recv_payload.time_elapsed / len(piece_data)
 
             piece = Piece(
                 chunk_idx=piece_meta.chunk_idx,
                 piece_idx=piece_meta.piece_idx,
                 piece_type=piece_meta.piece_type,
-                data=piece,
+                data=piece_data,
             )
 
             pieces.append(piece)

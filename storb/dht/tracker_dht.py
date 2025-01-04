@@ -4,10 +4,11 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class TrackerDHTValue(BaseModel):
+    infohash: str
     validator_id: int
     filename: str
     length: int = Field(..., gt=0, description="File length must be greater than 0.")
-    chunk_length: int = Field(
+    chunk_size: int = Field(
         ..., gt=0, description="Chunk length must be greater than 0."
     )
     chunk_count: int = Field(
@@ -17,6 +18,7 @@ class TrackerDHTValue(BaseModel):
         ..., description="List of chunk hashes.", min_items=1
     )
     creation_timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    signature: str
 
     @field_validator("filename")
     @classmethod

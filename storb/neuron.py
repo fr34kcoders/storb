@@ -91,7 +91,11 @@ class Neuron(ABC):
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
         assert self.uid, "UID must be defined"
 
-        self.dht = DHT(self.settings.dht.port)
+        self.dht = DHT(
+            db=self.settings.db_dir,
+            port=self.settings.dht.port,
+            file=self.settings.dht.file,
+        )
         assert self.dht, "DHT must be initialised"
 
         setup_rotating_logger(
