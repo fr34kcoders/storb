@@ -4,53 +4,12 @@ Provides functions for interacting with validator's database
 
 import json
 from contextlib import asynccontextmanager
-from enum import StrEnum
 
 import aiosqlite
-from pydantic import BaseModel
 
-from storb.util.piece import PieceType
-
-
-class DHTValueNamespace(StrEnum):
-    CHUNK = "chunk"
-    PIECE = "piece"
-    TRACKER = "tracker"
-
-
-class ChunkEntry(BaseModel):
-    chunk_hash: str
-    validator_id: int
-    piece_hashes: list[str]
-    chunk_idx: int
-    k: int
-    m: int
-    chunk_size: int
-    padlen: int
-    original_chunk_size: int
-    signature: str
-
-
-class PieceEntry(BaseModel):
-    piece_hash: str
-    miner_id: int
-    chunk_idx: int
-    piece_idx: int
-    piece_type: PieceType
-    tag: str
-    signature: str
-
-
-class TrackerEntry(BaseModel):
-    infohash: str
-    validator_id: int
-    filename: str
-    length: int
-    chunk_size: int
-    chunk_count: int
-    chunk_hashes: list[str]
-    creation_timestamp: str
-    signature: str
+from storb.dht.chunk_dht import ChunkDHTValue
+from storb.dht.piece_dht import PieceDHTValue
+from storb.dht.tracker_dht import TrackerDHTValue
 
 
 @asynccontextmanager
@@ -135,7 +94,7 @@ async def update_stats(conn: aiosqlite.Connection, miner_uid: int, stats: dict):
     await conn.commit()
 
 
-async def set_tracker_entry(conn: aiosqlite.Connection, entry: TrackerEntry):
+async def set_tracker_entry(conn: aiosqlite.Connection, entry: TrackerDHTValue):
     query = """
     INSERT INTO tracker (infohash, validator_id, filename, length, chunk_size, chunk_count, chunk_hashes, creation_timestamp, signature)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -175,7 +134,7 @@ async def get_tracker_entry(conn: aiosqlite.Connection, infohash: str):
     async with conn.execute(query, (infohash,)) as cursor:
         row = await cursor.fetchone()
         if row:
-            return TrackerEntry(
+            return TrackerDHTValue(
                 infohash=row[0],
                 validator_id=row[1],
                 filename=row[2],
@@ -198,7 +157,7 @@ async def delete_tracker_entry(conn: aiosqlite.Connection, infohash: str):
     await conn.commit()
 
 
-async def set_chunk_entry(conn: aiosqlite.Connection, entry: ChunkEntry):
+async def set_chunk_entry(conn: aiosqlite.Connection, entry: ChunkDHTValue):
     query = """
     INSERT INTO chunk (chunk_hash, validator_id, piece_hashes, chunk_idx, k, m, chunk_size, padlen, original_chunk_size, signature)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -240,7 +199,7 @@ async def get_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
     async with conn.execute(query, (chunk_hash,)) as cursor:
         row = await cursor.fetchone()
         if row:
-            return ChunkEntry(
+            return ChunkDHTValue(
                 chunk_hash=row[0],
                 validator_id=row[1],
                 piece_hashes=json.loads(row[2]),
@@ -264,12 +223,13 @@ async def delete_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
     await conn.commit()
 
 
-async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceEntry):
+async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceDHTValue):
     query = """
-    INSERT INTO piece (piece_hash, miner_id, chunk_idx, piece_idx, piece_type, tag, signature)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO piece (piece_hash, validator_id, miner_id, chunk_idx, piece_idx, piece_type, tag, signature)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(piece_hash)
     DO UPDATE SET
+    validator_id = excluded.validator_id,
     miner_id = excluded.miner_id,
     chunk_idx = excluded.chunk_idx,
     piece_idx = excluded.piece_idx,
@@ -281,6 +241,7 @@ async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceEntry):
         query,
         (
             entry.piece_hash,
+            entry.validator_id,
             entry.miner_id,
             entry.chunk_idx,
             entry.piece_idx,
@@ -300,14 +261,15 @@ async def get_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
     async with conn.execute(query, (piece_hash,)) as cursor:
         row = await cursor.fetchone()
         if row:
-            return PieceEntry(
+            return PieceDHTValue(
                 piece_hash=row[0],
-                miner_id=row[1],
-                chunk_idx=row[2],
-                piece_idx=row[3],
-                piece_type=row[4],
-                tag=row[5],
-                signature=row[6],
+                validator_id=row[1],
+                miner_id=row[2],
+                chunk_idx=row[3],
+                piece_idx=row[4],
+                piece_type=row[5],
+                tag=row[6],
+                signature=row[7],
             )
         return None  # Entry not found
 
@@ -321,9 +283,9 @@ async def delete_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
     await conn.commit()
 
 
-async def get_random_piece(conn: aiosqlite.Connection):
+async def get_random_piece(conn: aiosqlite.Connection, validator_id: int):
     """
-    Randomly selects a piece from the `piece` table.
+    Randomly selects a piece from the `piece` table for a given validator.
 
     Parameters
     ----------
@@ -337,19 +299,21 @@ async def get_random_piece(conn: aiosqlite.Connection):
     """
     query = """
     SELECT * FROM piece
+    WHERE validator_id = ?
     ORDER BY RANDOM()
     LIMIT 1
     """
-    async with conn.execute(query) as cursor:
+    async with conn.execute(query, (validator_id,)) as cursor:
         row = await cursor.fetchone()
         if row:
-            return PieceEntry(
+            return PieceDHTValue(
                 piece_hash=row[0],
-                miner_id=row[1],
-                chunk_idx=row[2],
-                piece_idx=row[3],
-                piece_type=row[4],
-                tag=row[5],
-                signature=row[6],
+                validator_id=row[1],
+                miner_id=row[2],
+                chunk_idx=row[3],
+                piece_idx=row[4],
+                piece_type=row[5],
+                tag=row[6],
+                signature=row[7],
             )
-        return None  # No pieces in the table
+        return None  # No pieces found

@@ -216,7 +216,7 @@ class PersistentStorageDHT(IStorage):
             match namespace:
                 case "chunk":
                     val = ChunkDHTValue.model_validate_json(value)
-                    entry = db.ChunkEntry(
+                    entry = ChunkDHTValue(
                         chunk_hash=key,
                         validator_id=val.validator_id,
                         piece_hashes=val.piece_hashes,
@@ -233,8 +233,9 @@ class PersistentStorageDHT(IStorage):
 
                 case "piece":
                     val = PieceDHTValue.model_validate_json(value)
-                    entry = db.PieceEntry(
+                    entry = PieceDHTValue(
                         piece_hash=key,
+                        validator_id=val.validator_id,
                         miner_id=val.miner_id,
                         chunk_idx=val.chunk_idx,
                         piece_idx=val.piece_idx,
@@ -247,7 +248,7 @@ class PersistentStorageDHT(IStorage):
 
                 case "tracker":
                     val = TrackerDHTValue.model_validate_json(value)
-                    entry = db.TrackerEntry(
+                    entry = TrackerDHTValue(
                         infohash=key,
                         validator_id=val.validator_id,
                         filename=val.filename,

@@ -539,36 +539,36 @@ class Validator(Neuron):
                 try:
                     piece = await self.dht.get_piece_entry(piece_id)
                     logger.info(f"piece: {piece}")
-                    # try:
-                    #     signature = piece.signature
-                    #     # create message object excluding the signature
-                    #     message = PieceMessage(
-                    #         piece_hash=piece_id,
-                    #         miner_id=piece.miner_id,
-                    #         chunk_idx=piece.chunk_idx,
-                    #         piece_idx=piece.piece_idx,
-                    #         piece_type=piece.piece_type,
-                    #     )
-                    #     # verify the signature
-                    #     if not verify_message(
-                    #         self.metagraph, message, signature, piece.miner_id
-                    #     ):
-                    #         logger.error(
-                    #             f"Signature verification failed for piece_id {piece_id}"
-                    #         )
-                    #         raise HTTPException(
-                    #             status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    #             detail=f"Signature verification failed for piece_id {piece_id}",
-                    #         )
-                    pieces_metadata.append(piece)
-                    # except Exception as e:
-                    #     logger.error(
-                    #         f"Failed to verify signature for piece_id {piece_id}: {e}"
-                    #     )
-                    #     raise HTTPException(
-                    #         status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    #         detail="Failed to verify signature",
-                    #     )
+                    try:
+                        signature = piece.signature
+                        # create message object excluding the signature
+                        message = PieceMessage(
+                            piece_hash=piece_id,
+                            miner_id=piece.miner_id,
+                            chunk_idx=piece.chunk_idx,
+                            piece_idx=piece.piece_idx,
+                            piece_type=piece.piece_type,
+                        )
+                        # verify the signature
+                        if not verify_message(
+                            self.metagraph, message, signature, piece.miner_id
+                        ):
+                            logger.error(
+                                f"Signature verification failed for piece_id {piece_id}"
+                            )
+                            raise HTTPException(
+                                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=f"Signature verification failed for piece_id {piece_id}",
+                            )
+                        pieces_metadata.append(piece)
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to verify signature for piece_id {piece_id}: {e}"
+                        )
+                        raise HTTPException(
+                            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Failed to verify signature",
+                        )
                 except Exception as e:
                     logger.error(f"Failed to get miner for piece_id {piece_id}: {e}")
                     raise HTTPException(
@@ -663,7 +663,7 @@ class Validator(Neuron):
         # obtain all miner stats from the validator database
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
-            challenge_piece = await db.get_random_piece(conn)
+            challenge_piece = await db.get_random_piece(conn, self.uid)
 
         if challenge_piece is not None:
             await self.challenge_miner(
@@ -926,6 +926,7 @@ class Validator(Neuron):
                             piece_hash=true_hash,
                             value=PieceDHTValue(
                                 piece_hash=true_hash,
+                                validator_id=self.uid,
                                 miner_id=uid,  # The actual miner who stored it
                                 chunk_idx=pieces[piece_idx].chunk_idx,
                                 piece_idx=pieces[piece_idx].piece_idx,

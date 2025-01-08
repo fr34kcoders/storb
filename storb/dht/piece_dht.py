@@ -5,6 +5,7 @@ from storb.util.piece import PieceType
 
 class PieceDHTValue(BaseModel):
     piece_hash: str
+    validator_id: int
     miner_id: int
     chunk_idx: int
     piece_idx: int

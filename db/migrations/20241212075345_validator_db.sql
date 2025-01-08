@@ -30,6 +30,7 @@ CREATE TABLE chunk (
 -- Table for mapping piece_hash to piece metadata and miner_id
 CREATE TABLE piece (
     piece_hash TEXT PRIMARY KEY,                     -- Piece ID
+    validator_id INTEGER,                            -- ID of the validator
     miner_id INTEGER,                                -- ID of the miner
     chunk_idx INTEGER,                               -- Index of the chunk in the file
     piece_idx INTEGER,                               -- Index of the piece in the chunk

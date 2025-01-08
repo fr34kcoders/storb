@@ -137,45 +137,35 @@ class Challenge(BaseModel):
 
     @field_serializer("prp_key")
     def serialize_prp_key(self, prp_key: bytes) -> str:
-        logger.critical(f"Serializing prp_key: {prp_key}")
         if isinstance(prp_key, bytes):
             new_key = base64.b64encode(prp_key).decode("utf-8")
-            logger.critical(f"Returning new_key: {new_key}")
             return new_key
         return prp_key
 
     @field_serializer("prf_key")
     def serialize_prf_key(self, prf_key: bytes) -> str:
-        logger.critical(f"Serializing prf_key: {prf_key}")
         if isinstance(prf_key, bytes):
             new_key = base64.b64encode(prf_key).decode("utf-8")
-            logger.critical(f"Returning new_key: {new_key}")
             return new_key
         return prf_key
 
     @field_validator("prf_key", mode="before")
     def deserialize_prf_key(cls, value):
-        logger.critical(f"Deserializing prf_key: {value}")
         if isinstance(value, str):
             try:
                 decoded_value = base64.b64decode(value)
-                logger.critical(f"Decoded prf_key: {decoded_value}")
                 return decoded_value
             except Exception as e:
-                logger.critical(f"Error decoding prf_key: {e}")
                 raise ValueError("Invalid base64 for prf_key")
         return value
 
     @field_validator("prp_key", mode="before")
     def deserialize_prp_key(cls, value):
-        logger.critical(f"Deserializing prp_key: {value}")
         if isinstance(value, str):
             try:
                 decoded_value = base64.b64decode(value)
-                logger.critical(f"Decoded prp_key: {decoded_value}")
                 return decoded_value
             except Exception as e:
-                logger.critical(f"Error decoding prp_key: {e}")
                 raise ValueError("Invalid base64 for prp_key")
         return value
 
@@ -331,10 +321,8 @@ def main():
     data = os.urandom(1024)
     system = ChallengeSystem()
 
-    # The next line should pass, since we declare `_rsa_obj` as PrivateAttr:
     system.initialize_keys()
 
-    # Test the entire flow
     tag = system.generate_tag(data)
     challenge = system.issue_challenge(tag)
     proof = system.generate_proof(data, tag, challenge)
