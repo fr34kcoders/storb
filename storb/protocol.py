@@ -2,6 +2,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from storb.challenge import Challenge, Proof
 from storb.dht.chunk_dht import ChunkDHTValue
 from storb.dht.piece_dht import PieceDHTValue
 from storb.util.piece import ProcessedPieceInfo
@@ -29,6 +30,28 @@ class RetrieveResponse(BaseModel):
 
 class StoreResponse(BaseModel):
     infohash: str
+
+
+class NewChallenge(BaseModel):
+    challenge_id: str
+    piece_id: str
+    validator_id: int
+    challenge_deadline: str
+    public_key: int
+    public_exponent: int
+    challenge: Challenge
+    signature: str
+
+
+class AckChallenge(BaseModel):
+    challenge_id: str
+    accept: bool
+
+
+class ProofResponse(BaseModel):
+    challenge_id: str
+    piece_id: str
+    proof: Proof
 
 
 class MetadataSynapse(BaseModel):

@@ -10,7 +10,7 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.utils import int_to_bytes
-from pydantic import BaseModel, field_serializer, root_validator
+from pydantic import BaseModel, field_serializer, field_validator
 
 from storb.util.logging import get_logger
 
@@ -117,6 +117,16 @@ class APDPTag(BaseModel):
     def serialize_prf_value(self, prf_value: bytes) -> str:
         return base64.b64encode(prf_value).decode("utf-8")
 
+    @field_validator("prf_value", mode="before")
+    def deserialize_prf_value(cls, value):
+        if isinstance(value, str):
+            try:
+                decoded_value = base64.b64decode(value)
+                return decoded_value
+            except Exception as e:
+                raise ValueError("Invalid base64 for prf_value")
+        return value
+
 
 class Challenge(BaseModel):
     tag: APDPTag
@@ -127,31 +137,53 @@ class Challenge(BaseModel):
 
     @field_serializer("prp_key")
     def serialize_prp_key(self, prp_key: bytes) -> str:
-        return base64.b64encode(prp_key).decode("utf-8")
+        logger.critical(f"Serializing prp_key: {prp_key}")
+        if isinstance(prp_key, bytes):
+            new_key = base64.b64encode(prp_key).decode("utf-8")
+            logger.critical(f"Returning new_key: {new_key}")
+            return new_key
+        return prp_key
 
     @field_serializer("prf_key")
     def serialize_prf_key(self, prf_key: bytes) -> str:
-        return base64.b64encode(prf_key).decode("utf-8")
+        logger.critical(f"Serializing prf_key: {prf_key}")
+        if isinstance(prf_key, bytes):
+            new_key = base64.b64encode(prf_key).decode("utf-8")
+            logger.critical(f"Returning new_key: {new_key}")
+            return new_key
+        return prf_key
 
-    @root_validator(pre=True)
-    def check_params(cls, values):
-        prp_key = values.get("prp_key")
-        prf_key = values.get("prf_key")
-        s = values.get("s")
-        g_s = values.get("g_s")
-        if not s or s <= 0 or not g_s or g_s <= 0 or not prp_key or not prf_key:
-            raise ValueError("Invalid challenge parameters for single block.")
-        return values
+    @field_validator("prf_key", mode="before")
+    def deserialize_prf_key(cls, value):
+        logger.critical(f"Deserializing prf_key: {value}")
+        if isinstance(value, str):
+            try:
+                decoded_value = base64.b64decode(value)
+                logger.critical(f"Decoded prf_key: {decoded_value}")
+                return decoded_value
+            except Exception as e:
+                logger.critical(f"Error decoding prf_key: {e}")
+                raise ValueError("Invalid base64 for prf_key")
+        return value
+
+    @field_validator("prp_key", mode="before")
+    def deserialize_prp_key(cls, value):
+        logger.critical(f"Deserializing prp_key: {value}")
+        if isinstance(value, str):
+            try:
+                decoded_value = base64.b64decode(value)
+                logger.critical(f"Decoded prp_key: {decoded_value}")
+                return decoded_value
+            except Exception as e:
+                logger.critical(f"Error decoding prp_key: {e}")
+                raise ValueError("Invalid base64 for prp_key")
+        return value
 
 
 class Proof(BaseModel):
     tag_value: int
     block_value: int
-    hashed_result: bytes
-
-    @field_serializer("hashed_result")
-    def serialize_hashed_result(self, hashed_result: bytes) -> str:
-        return base64.b64encode(hashed_result).decode("utf-8")
+    hashed_result: str
 
 
 class ChallengeSystem:
@@ -217,18 +249,17 @@ class ChallengeSystem:
         prp_key = Fernet.generate_key()
         prf_key = Fernet.generate_key()
 
+        tag = APDPTag.model_validate_json(tag)
+
         return Challenge(s=s, g_s=g_s, prf_key=prf_key, prp_key=prp_key, tag=tag)
 
-    def generate_proof(self, data: bytes, tag: APDPTag, challenge: Challenge) -> Proof:
+    def generate_proof(
+        self, data: bytes, tag: APDPTag, challenge: Challenge, n: int
+    ) -> Proof:
         if not tag or not challenge:
             raise APDPError("Invalid tag or challenge for proof generation.")
-        if self.key.rsa is None:
-            raise APDPError("Keys not initialized.")
 
         logger.debug(f"Generating proof for data: {data[:10]}...")
-
-        rsa_key = self.key.rsa
-        n = rsa_key.public_key().public_numbers().n
 
         logger.debug(f"RSA modulus: {n}")
         block_int = int.from_bytes(data, "big") % n
@@ -251,6 +282,7 @@ class ChallengeSystem:
         hashed_result = hashlib.sha256(int_to_bytes(rho)).digest()
 
         logger.debug(f"Hashed result: {hashed_result}")
+        hashed_result = base64.b64encode(hashed_result).decode("utf-8")
 
         return Proof(
             tag_value=aggregated_tag,
@@ -258,15 +290,15 @@ class ChallengeSystem:
             hashed_result=hashed_result,
         )
 
-    def verify_proof(self, proof: Proof, challenge: Challenge, tag: APDPTag) -> bool:
+    def verify_proof(
+        self, proof: Proof, challenge: Challenge, tag: APDPTag, n: int, e: int
+    ) -> bool:
         if proof is None or challenge is None or tag is None:
             raise APDPError("Invalid proof, challenge, or tag.")
         if self.key.rsa is None:
             raise APDPError("Keys not initialized.")
 
         rsa_key = self.key.rsa
-        n = rsa_key.public_key().public_numbers().n
-        e = rsa_key.public_key().public_numbers().e
 
         try:
             tau = pow(proof.tag_value, e, n)
@@ -287,6 +319,11 @@ class ChallengeSystem:
         tau_s = pow(tau, challenge.s, n)
 
         expected_hash = hashlib.sha256(int_to_bytes(tau_s)).digest()
+        expected_hash = base64.b64encode(expected_hash).decode("utf-8")
+        # convert expected hash to base64
+        logger.debug(
+            f"Expected hash: {expected_hash} vs. Proof hash: {proof.hashed_result}"
+        )
         return expected_hash == proof.hashed_result
 
 

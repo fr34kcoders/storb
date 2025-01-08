@@ -34,6 +34,7 @@ CREATE TABLE piece (
     chunk_idx INTEGER,                               -- Index of the chunk in the file
     piece_idx INTEGER,                               -- Index of the piece in the chunk
     piece_type INTEGER CHECK (piece_type IN (0, 1)), -- Type of the piece (0: data, 1: parity)
+    tag TEXT,                                        -- APDP Tag of the piece
     signature TEXT                                   -- Signature of the DHT entry by the miner storing the piece
 );
 

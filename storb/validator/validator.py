@@ -5,7 +5,8 @@ import sys
 import threading
 import time
 import typing
-from datetime import UTC, datetime
+import uuid
+from datetime import UTC, datetime, timedelta
 from typing import AsyncGenerator, Literal, override
 
 import httpx
@@ -27,6 +28,7 @@ from starlette.status import (
 
 import storb.db as db
 from storb import protocol
+from storb.challenge import APDPTag, Proof
 from storb.constants import (
     NUM_UIDS_QUERY,
     QUERY_TIMEOUT,
@@ -98,6 +100,10 @@ class Validator(Neuron):
             len(self.metagraph.nodes), dtype=np.float32
         )
 
+        # Initialize Challenge keys
+        self.challenge.initialize_keys()
+        self.challenges = {}
+
         logger.info("load_state()")
         self.load_state()
 
@@ -156,6 +162,12 @@ class Validator(Neuron):
         self.app.add_api_route(
             "/miners",
             self.get_miners_for_file,
+            methods=["POST"],
+        )
+
+        self.app.add_api_route(
+            "/verify-challenge",
+            self.verify_challenge,
             methods=["POST"],
         )
 
@@ -528,36 +540,36 @@ class Validator(Neuron):
                 try:
                     piece = await self.dht.get_piece_entry(piece_id)
                     logger.info(f"piece: {piece}")
-                    try:
-                        signature = piece.signature
-                        # create message object excluding the signature
-                        message = PieceMessage(
-                            piece_hash=piece_id,
-                            miner_id=piece.miner_id,
-                            chunk_idx=piece.chunk_idx,
-                            piece_idx=piece.piece_idx,
-                            piece_type=piece.piece_type,
-                        )
-                        # verify the signature
-                        if not verify_message(
-                            self.metagraph, message, signature, piece.miner_id
-                        ):
-                            logger.error(
-                                f"Signature verification failed for piece_id {piece_id}"
-                            )
-                            raise HTTPException(
-                                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail=f"Signature verification failed for piece_id {piece_id}",
-                            )
-                        pieces_metadata.append(piece)
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to verify signature for piece_id {piece_id}: {e}"
-                        )
-                        raise HTTPException(
-                            status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="Failed to verify signature",
-                        )
+                    # try:
+                    #     signature = piece.signature
+                    #     # create message object excluding the signature
+                    #     message = PieceMessage(
+                    #         piece_hash=piece_id,
+                    #         miner_id=piece.miner_id,
+                    #         chunk_idx=piece.chunk_idx,
+                    #         piece_idx=piece.piece_idx,
+                    #         piece_type=piece.piece_type,
+                    #     )
+                    #     # verify the signature
+                    #     if not verify_message(
+                    #         self.metagraph, message, signature, piece.miner_id
+                    #     ):
+                    #         logger.error(
+                    #             f"Signature verification failed for piece_id {piece_id}"
+                    #         )
+                    #         raise HTTPException(
+                    #             status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    #             detail=f"Signature verification failed for piece_id {piece_id}",
+                    #         )
+                    pieces_metadata.append(piece)
+                    # except Exception as e:
+                    #     logger.error(
+                    #         f"Failed to verify signature for piece_id {piece_id}: {e}"
+                    #     )
+                    #     raise HTTPException(
+                    #         status_code=HTTP_500_INTERNAL_SERVER_ERROR,
+                    #         detail="Failed to verify signature",
+                    #     )
                 except Exception as e:
                     logger.error(f"Failed to get miner for piece_id {piece_id}: {e}")
                     raise HTTPException(
@@ -574,6 +586,62 @@ class Validator(Neuron):
         )
 
         return response
+
+    async def challenge_miner(self, miner_id: int, piece_id: str, tag: str):
+        """Challenge the miners to verify they are storing the pieces"""
+        logger.debug(f"Challenging miner {miner_id} for piece {piece_id}")
+        # Create the challenge message
+        challenge = self.challenge.issue_challenge(tag)
+        try:
+            signature = sign_message(challenge, self.keypair)
+        except Exception as e:
+            logger.error(f"Failed to sign challenge: {e}")
+            return
+
+        challenge_deadline: datetime = datetime.now(UTC) + timedelta(minutes=15)
+        challenge_deadline = challenge_deadline.isoformat()
+
+        challenge_message = protocol.NewChallenge(
+            challenge_id=uuid.uuid4().hex,
+            piece_id=piece_id,
+            validator_id=self.uid,
+            challenge_deadline=challenge_deadline,
+            public_key=self.challenge.key.rsa.public_key().public_numbers().n,
+            public_exponent=self.challenge.key.rsa.public_key().public_numbers().e,
+            challenge=challenge,
+            signature=signature,
+        )
+
+        logger.debug(f"Challenge message: {challenge_message}")
+        # Send the challenge to the miner
+        miner_hotkey = list(self.metagraph.nodes.keys())[miner_id]
+        if miner_hotkey is None:
+            logger.error(f"Miner {miner_id} not found in metagraph")
+            return
+
+        payload = Payload(
+            data=challenge_message,
+            file=None,
+            time_elapsed=0,
+        )
+        logger.info(
+            f"Sent challenge {challenge_message.challenge_id} to miner {miner_id} for piece {piece_id}"
+        )
+        logger.debug(f"PRF KEY: {payload.data.challenge.prf_key}")
+        response = await self.query_miner(
+            miner_hotkey, "/challenge", payload, method="POST"
+        )
+
+        _, response = response
+
+        if response is None:
+            logger.error(f"Failed to challenge miner {miner_id}")
+            return
+
+        self.challenges[challenge_message.challenge_id] = challenge_message
+
+        logger.debug(f"Received response from miner {miner_id}, response: {response}")
+        logger.info(f"Successfully challenged miner {miner_id}")
 
     # TODO: naming could be better, although this is the Bittensor default
     async def forward(self):
@@ -596,6 +664,14 @@ class Validator(Neuron):
         # obtain all miner stats from the validator database
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
+            challenge_piece = await db.get_random_piece(conn)
+
+        if challenge_piece is not None:
+            await self.challenge_miner(
+                challenge_piece.miner_id,
+                challenge_piece.piece_hash,
+                challenge_piece.tag,
+            )
 
         # calculate the score(s) for uids given their stats
         response_rate_uids, response_rate_scores = get_response_rate_scores(
@@ -733,6 +809,7 @@ class Validator(Neuron):
                 data = None
                 if json_data or json_data != {"detail": "Not Found"}:
                     try:
+                        logger.debug(f"Payload data: {json_data}")
                         data = payload.data.model_validate(json_data)
                     except Exception:
                         logger.warning(
@@ -769,9 +846,7 @@ class Validator(Neuron):
         return await asyncio.gather(*uid_to_query_task.values())
 
     async def process_pieces(
-        self,
-        pieces: list[Piece],
-        hotkeys: list[str],
+        self, pieces: list[Piece], hotkeys: list[str]
     ) -> tuple[list[str], list[tuple[str, bytes, int]]]:
         """Process pieces of data by generating their hashes, encoding them,
         and querying miners.
@@ -831,6 +906,35 @@ class Validator(Neuron):
                         miner_stats[uid]["store_successes"] += 1
                         miner_stats[uid]["total_successes"] += 1
                         logger.debug(f"Miner {uid} successfully stored {true_hash}")
+
+                        tag = self.challenge.generate_tag(pieces[piece_idx].data)
+                        tag = tag.model_dump_json()
+
+                        message = PieceMessage(
+                            piece_hash=true_hash,
+                            miner_id=uid,
+                            chunk_idx=pieces[piece_idx].chunk_idx,
+                            piece_idx=pieces[piece_idx].piece_idx,
+                            piece_type=pieces[piece_idx].piece_type,
+                        )
+                        try:
+                            signature = sign_message(message, self.keypair)
+                        except Exception as e:
+                            logger.error(f"Failed to sign message: {e}")
+                            raise
+                        # Now store the piece in the DHT with the *actual* miner_id = uid
+                        await self.dht.store_piece_entry(
+                            piece_hash=true_hash,
+                            value=PieceDHTValue(
+                                piece_hash=true_hash,
+                                miner_id=uid,  # The actual miner who stored it
+                                chunk_idx=pieces[piece_idx].chunk_idx,
+                                piece_idx=pieces[piece_idx].piece_idx,
+                                piece_type=pieces[piece_idx].piece_type,
+                                tag=tag,
+                                signature=signature,
+                            ),
+                        )
 
             to_query = []  # Reset the batch
 
@@ -904,6 +1008,64 @@ class Validator(Neuron):
 
     """API Routes"""
 
+    def verify_challenge(self, challenge_request: protocol.ProofResponse) -> bool:
+        """Verify the challenge proof from the miner
+
+        Parameters
+        ----------
+        challenge_request : protocol.ProofResponse
+            The challenge proof from the miner
+
+        Returns
+        -------
+        bool
+            True if the proof is valid, False otherwise
+        """
+        logger.debug(f"Verifying challenge proof: {challenge_request.challenge_id}")
+        proof = challenge_request.proof
+        try:
+            proof = Proof.model_validate(proof)
+        except Exception as e:
+            logger.error(f"Invalid proof: {e}")
+            return False
+
+        challenge: protocol.NewChallenge = self.challenges.get(
+            challenge_request.challenge_id
+        )
+        if not challenge:
+            logger.error(f"Challenge {challenge_request.challenge_id} not found")
+            return False
+
+        if challenge.challenge_deadline < datetime.now(UTC).isoformat():
+            logger.error(f"Challenge {challenge_request.challenge_id} has expired")
+            return False
+
+        tag = challenge.challenge.tag
+        tag = APDPTag.model_validate(tag)
+        logger.debug(f"Tag: {tag}")
+
+        logger.debug(
+            f"Proof: {proof} \n Challenge: {challenge.challenge} \n tag: {tag} \n n: {challenge.public_key} \n e: {challenge.public_exponent}"
+        )
+
+        if not self.challenge.verify_proof(
+            proof=proof,
+            challenge=challenge.challenge,
+            tag=tag,
+            n=challenge.public_key,
+            e=challenge.public_exponent,
+        ):
+            logger.error(
+                f"Proof verification failed for challenge {challenge.challenge_id}"
+            )
+            return False
+
+        logger.info(
+            f"Proof verification successful for challenge {challenge.challenge_id}"
+        )
+
+        return True
+
     def status(self) -> str:
         return "Hello from Storb!"
 
@@ -934,7 +1096,9 @@ class Validator(Neuron):
                     chunk_hashes=metadata.chunk_hashes,
                     creation_timestamp=metadata.creation_timestamp,
                 )
-                if not verify_message(self.metagraph, message, signature, self.uid):
+                if not verify_message(
+                    self.metagraph, message, signature, metadata.validator_id
+                ):
                     raise HTTPException(
                         status_code=HTTP_400_BAD_REQUEST, detail="Invalid signature"
                     )
@@ -1036,6 +1200,7 @@ class Validator(Neuron):
                         )
 
                         encoded_chunk = encode_chunk(chunk_buffer, chunk_idx)
+
                         sent_piece_hashes, _ = await self.process_pieces(
                             pieces=encoded_chunk.pieces, hotkeys=hotkeys
                         )

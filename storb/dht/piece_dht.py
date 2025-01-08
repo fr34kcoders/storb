@@ -9,6 +9,7 @@ class PieceDHTValue(BaseModel):
     chunk_idx: int
     piece_idx: int
     piece_type: PieceType
+    tag: str
     signature: str
 
     def to_dict(self) -> dict:

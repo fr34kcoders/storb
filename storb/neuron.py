@@ -10,6 +10,7 @@ from fiber.chain import chain_utils, interface, post_ip_to_chain
 from fiber.chain.metagraph import Metagraph
 
 from storb import __spec_version__, get_spec_version
+from storb.challenge import ChallengeSystem
 from storb.config import Config
 from storb.constants import NeuronType
 from storb.dht.base_dht import DHT
@@ -86,6 +87,8 @@ class Neuron(ABC):
         self.check_registration()
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
         assert self.uid, "UID must be defined"
+
+        self.challenge = ChallengeSystem()
 
         self.dht = DHT(
             db=self.settings.db_dir,

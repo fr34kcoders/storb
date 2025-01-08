@@ -37,6 +37,7 @@ class PieceEntry(BaseModel):
     chunk_idx: int
     piece_idx: int
     piece_type: PieceType
+    tag: str
     signature: str
 
 
@@ -265,14 +266,15 @@ async def delete_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
 
 async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceEntry):
     query = """
-    INSERT INTO piece (piece_hash, miner_id, chunk_idx, piece_idx, piece_type, signature)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO piece (piece_hash, miner_id, chunk_idx, piece_idx, piece_type, tag, signature)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(piece_hash)
     DO UPDATE SET
     miner_id = excluded.miner_id,
     chunk_idx = excluded.chunk_idx,
     piece_idx = excluded.piece_idx,
     piece_type = excluded.piece_type,
+    tag = excluded.tag,
     signature = excluded.signature
     """
     await conn.execute(
@@ -283,6 +285,7 @@ async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceEntry):
             entry.chunk_idx,
             entry.piece_idx,
             entry.piece_type,
+            entry.tag,
             entry.signature,
         ),
     )
@@ -303,7 +306,8 @@ async def get_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
                 chunk_idx=row[2],
                 piece_idx=row[3],
                 piece_type=row[4],
-                signature=row[5],
+                tag=row[5],
+                signature=row[6],
             )
         return None  # Entry not found
 
@@ -315,3 +319,37 @@ async def delete_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
     """
     await conn.execute(query, (piece_hash,))
     await conn.commit()
+
+
+async def get_random_piece(conn: aiosqlite.Connection):
+    """
+    Randomly selects a piece from the `piece` table.
+
+    Parameters
+    ----------
+    conn : aiosqlite.Connection
+        The database connection.
+
+    Returns
+    -------
+    PieceEntry or None
+        A random PieceEntry object if a piece is found, or None if the table is empty.
+    """
+    query = """
+    SELECT * FROM piece
+    ORDER BY RANDOM()
+    LIMIT 1
+    """
+    async with conn.execute(query) as cursor:
+        row = await cursor.fetchone()
+        if row:
+            return PieceEntry(
+                piece_hash=row[0],
+                miner_id=row[1],
+                chunk_idx=row[2],
+                piece_idx=row[3],
+                piece_type=row[4],
+                tag=row[5],
+                signature=row[6],
+            )
+        return None  # No pieces in the table

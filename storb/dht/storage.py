@@ -239,6 +239,7 @@ class PersistentStorageDHT(IStorage):
                         chunk_idx=val.chunk_idx,
                         piece_idx=val.piece_idx,
                         piece_type=val.piece_type,
+                        tag=val.tag,
                         signature=val.signature,
                     )
                     logger.debug(f"flushing piece entry {entry} to disk")
@@ -326,6 +327,7 @@ class PersistentStorageDHT(IStorage):
                             chunk_idx=entry.chunk_idx,
                             piece_idx=entry.piece_idx,
                             piece_type=entry.piece_type,
+                            tag=entry.tag,
                             signature=entry.signature,
                         )
                         .model_dump_json()
