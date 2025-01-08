@@ -197,6 +197,13 @@ class Config:
         )
 
         self._parser.add_argument(
+            "--pem_file",
+            type=str,
+            help="Path to the PEM file",
+            default=self.settings.pem_file,
+        )
+
+        self._parser.add_argument(
             "--log_level",
             type=str,
             help="Log level",

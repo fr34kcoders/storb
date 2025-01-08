@@ -28,7 +28,6 @@ sys.set_int_max_str_digits(0)
 class Miner(Neuron):
     def __init__(self):
         super(Miner, self).__init__(NeuronType.Miner)
-        self.challenge.initialize_keys()
         self.object_store = ObjectStore(store_dir=self.settings.store_dir)
         self.challenge_queue: asyncio.PriorityQueue[
             tuple[datetime.datetime, protocol.NewChallenge]

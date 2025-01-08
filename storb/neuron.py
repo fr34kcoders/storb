@@ -14,6 +14,7 @@ from storb.challenge import ChallengeSystem
 from storb.config import Config
 from storb.constants import NeuronType
 from storb.dht.base_dht import DHT
+from storb.util.key_manager import KeyManager
 from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
@@ -32,6 +33,11 @@ class Neuron(ABC):
         assert (
             get_spec_version(self.settings.version) == self.spec_version
         ), "The spec versions must match"
+
+        self.challenge = ChallengeSystem()
+        self.key_manager = KeyManager(
+            key=self.challenge.key, pem_file=self.settings.pem_file
+        )
 
         # Miners and validators must set these themselves
         self.app: FastAPI = None
@@ -87,8 +93,6 @@ class Neuron(ABC):
         self.check_registration()
         self.uid = self.metagraph.nodes.get(self.keypair.ss58_address).node_id
         assert self.uid, "UID must be defined"
-
-        self.challenge = ChallengeSystem()
 
         self.dht = DHT(
             db=self.settings.db_dir,

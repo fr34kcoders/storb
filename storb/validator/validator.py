@@ -101,7 +101,6 @@ class Validator(Neuron):
         )
 
         # Initialize Challenge keys
-        self.challenge.initialize_keys()
         self.challenges = {}
 
         logger.info("load_state()")
