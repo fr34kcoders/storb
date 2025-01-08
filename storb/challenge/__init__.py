@@ -31,10 +31,41 @@ class CryptoUtils:
 
     @staticmethod
     def generate_rsa_private_key(key_size: int) -> rsa.RSAPrivateKey:
+        """Generate an RSA private key.
+
+        Parameters
+        ----------
+        key_size: int
+            Size of the RSA key
+
+        Returns
+        -------
+        rsa.RSAPrivateKey
+            Generated RSA private key
+        """
         return rsa.generate_private_key(public_exponent=65537, key_size=key_size)
 
     @staticmethod
     def full_domain_hash(rsa_key: rsa.RSAPrivateKey, data: bytes) -> int:
+        """Compute the full domain hash of a given data block.
+
+        Parameters
+        ----------
+        rsa_key: rsa.RSAPrivateKey
+            RSA private key
+        data: bytes
+            Data block to hash
+
+        Raises
+        ------
+        APDPError
+            If the RSA key or data is invalid
+
+        Returns
+        -------
+        int
+            Full domain hash of the data block
+        """
         if rsa_key is None or data is None:
             raise APDPError("Invalid parameters for full_domain_hash")
         hashed = hashlib.sha256(data).digest()
@@ -42,16 +73,21 @@ class CryptoUtils:
 
     @staticmethod
     def prf(key: bytes, input_int: int, out_len=16) -> bytes:
-        """
-        Psuedo-random function using HMAC-SHA256
+        """Psuedo-random function using HMAC-SHA256
 
-        Arguments:
-            key (bytes): Key used for encryption
-            input_int (int): Input integer to encrypt
-            out_len (int): Length of output block
+        Parameters
+        ----------
+        key: bytes
+            Key used for encryption
+        input_int: int
+            Input integer to encrypt
+        out_len: int
+            Length of output block
 
-        Returns:
-            bytes: Encrypted block
+        Returns
+        -------
+        bytes
+            Encrypted block
         """
         if not key or len(key) == 0:
             raise APDPError("Invalid key for PRF")
@@ -60,10 +96,7 @@ class CryptoUtils:
 
 
 class APDPKey(BaseModel):
-    """
-    Holds the cryptographic parameters for single-block APDP.
-    Using Pydantic to store/serialize them.
-    """
+    """Holds the cryptographic parameters for single-block APDP. Using Pydantic to store/serialize them."""
 
     rsa: Optional[RSAPrivateKey] = None
     g: Optional[int] = None
@@ -73,6 +106,18 @@ class APDPKey(BaseModel):
         arbitrary_types_allowed = True
 
     def generate(self, rsa_bits=DEFAULT_RSA_KEY_SIZE):
+        """Generate RSA key, generator, and PRF key.
+
+        Parameters
+        ----------
+        rsa_bits: int
+            Size of the RSA key
+
+        Raises
+        ------
+        APDPError
+            If the RSA key size is invalid or keys cannot be generated
+        """
         if rsa_bits <= 0:
             raise APDPError("Invalid RSA key size.")
 
@@ -103,22 +148,34 @@ class APDPKey(BaseModel):
         self.g = None
         self.prf_key = None
 
-    # def get_private_key_obj(self) -> Optional[RSAPrivateKey]:
-    #     """Helper method if you prefer a clearer name."""
-    #     return self._rsa_obj
-
 
 class APDPTag(BaseModel):
+    """Data model for APDP tag."""
+
     index: int
     tag_value: int
     prf_value: bytes
 
     @field_serializer("prf_value")
     def serialize_prf_value(self, prf_value: bytes) -> str:
+        """Serialize PRF value to base64.
+
+        Parameters
+        ----------
+        prf_value: bytes
+            PRF value to serialize
+
+        Returns
+        -------
+        str
+            Base64-encoded PRF value
+        """
         return base64.b64encode(prf_value).decode("utf-8")
 
     @field_validator("prf_value", mode="before")
     def deserialize_prf_value(cls, value):
+        """Deserialize PRF value from base64."""
+
         if isinstance(value, str):
             try:
                 decoded_value = base64.b64decode(value)
@@ -129,6 +186,8 @@ class APDPTag(BaseModel):
 
 
 class Challenge(BaseModel):
+    """Data model for APDP challenge."""
+
     tag: APDPTag
     prp_key: bytes
     prf_key: bytes
@@ -137,6 +196,18 @@ class Challenge(BaseModel):
 
     @field_serializer("prp_key")
     def serialize_prp_key(self, prp_key: bytes) -> str:
+        """Serialize PRP key to base64.
+
+        Parameters
+        ----------
+        prp_key: bytes
+            PRP key to serialize
+
+        Returns
+        -------
+        str
+            Base64-encoded PRP key
+        """
         if isinstance(prp_key, bytes):
             new_key = base64.b64encode(prp_key).decode("utf-8")
             return new_key
@@ -144,6 +215,18 @@ class Challenge(BaseModel):
 
     @field_serializer("prf_key")
     def serialize_prf_key(self, prf_key: bytes) -> str:
+        """Serialize PRF key to base64.
+
+        Parameters
+        ----------
+        prf_key: bytes
+            PRF key to serialize
+
+        Returns
+        -------
+        str
+            Base64-encoded PRF key
+        """
         if isinstance(prf_key, bytes):
             new_key = base64.b64encode(prf_key).decode("utf-8")
             return new_key
@@ -151,6 +234,7 @@ class Challenge(BaseModel):
 
     @field_validator("prf_key", mode="before")
     def deserialize_prf_key(cls, value):
+        """Deserialize PRF key from base64."""
         if isinstance(value, str):
             try:
                 decoded_value = base64.b64decode(value)
@@ -161,6 +245,7 @@ class Challenge(BaseModel):
 
     @field_validator("prp_key", mode="before")
     def deserialize_prp_key(cls, value):
+        """Deserialize PRP key from base64."""
         if isinstance(value, str):
             try:
                 decoded_value = base64.b64decode(value)
@@ -171,25 +256,46 @@ class Challenge(BaseModel):
 
 
 class Proof(BaseModel):
+    """Data model for APDP proof."""
+
     tag_value: int
     block_value: int
     hashed_result: str
 
 
 class ChallengeSystem:
-    """Single-block APDP with Pydantic-based key and data models."""
+    """Main class for APDP challenge system."""
 
     def __init__(self):
         self.key = APDPKey()
         logger.debug("Initialized APDP system.")
 
     def initialize_keys(self, rsa_bits=DEFAULT_RSA_KEY_SIZE):
+        """Initialize keys for the APDP system.
+
+        Parameters
+        ----------
+        rsa_bits: int
+            Size of the RSA key
+        """
         assert self.key is not None
         if rsa_bits <= 0:
             raise APDPError("Invalid RSA key size.")
         self.key.generate(rsa_bits)
 
     def generate_tag(self, data: bytes) -> APDPTag:
+        """Generate a tag for a given data block.
+
+        Parameters
+        ----------
+        data: bytes
+            Data block to generate tag for
+
+        Returns
+        -------
+        APDPTag
+            Generated tag
+        """
         if self.key.rsa is None or self.key.g is None or self.key.prf_key is None:
             raise APDPError("Keys are not initialized.")
         if not data:
@@ -222,6 +328,18 @@ class ChallengeSystem:
         return APDPTag(index=0, tag_value=tag_value, prf_value=prf_value)
 
     def issue_challenge(self, tag: APDPTag) -> Challenge:
+        """Issue a challenge for a given tag.
+
+        Parameters
+        ----------
+        tag: APDPTag
+            Tag to issue challenge for
+
+        Returns
+        -------
+        Challenge
+            Issued challenge
+        """
         if self.key.rsa is None or self.key.g is None:
             raise APDPError("Keys are not initialized.")
 
@@ -246,6 +364,24 @@ class ChallengeSystem:
     def generate_proof(
         self, data: bytes, tag: APDPTag, challenge: Challenge, n: int
     ) -> Proof:
+        """Generate a proof for a given data block, tag, and challenge.
+
+        Parameters
+        ----------
+        data: bytes
+            Data block to generate proof for
+        tag: APDPTag
+            Tag for the data block
+        challenge: Challenge
+            Challenge for the tag
+        n: int
+            RSA modulus
+
+        Returns
+        -------
+        Proof
+            Generated proof
+        """
         if not tag or not challenge:
             raise APDPError("Invalid tag or challenge for proof generation.")
 
@@ -283,6 +419,26 @@ class ChallengeSystem:
     def verify_proof(
         self, proof: Proof, challenge: Challenge, tag: APDPTag, n: int, e: int
     ) -> bool:
+        """Verify a proof given a challenge, tag, and proof.
+
+        Parameters
+        ----------
+        proof: Proof
+            Proof to verify
+        challenge: Challenge
+            Challenge for the proof
+        tag: APDPTag
+            Tag for the proof
+        n: int
+            RSA modulus
+        e: int
+            RSA public exponent
+
+        Returns
+        -------
+        bool
+            True if proof is valid, False otherwise
+        """
         if proof is None or challenge is None or tag is None:
             raise APDPError("Invalid proof, challenge, or tag.")
         if self.key.rsa is None:

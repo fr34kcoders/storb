@@ -2,15 +2,10 @@ import os
 
 import pytest
 
-# Update this import to match your new single-block module/classes.
-# E.g. from storage_subnet.single_block_challenge import (
-#     APDPError,
-#     SingleBlockChallengeSystem,
-# )
 from storb.challenge import (
     APDPError,
-    ChallengeSystem,  # Example
-)  # If your APDPError remains in the same place
+    ChallengeSystem,
+)
 
 
 @pytest.fixture

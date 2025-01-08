@@ -16,13 +16,13 @@ from storb import protocol
 from storb.constants import QUERY_TIMEOUT, NeuronType
 from storb.neuron import Neuron
 from storb.util.logging import get_logger
+from storb.util.message_signing import verify_message
 from storb.util.middleware import LoggerMiddleware
 from storb.util.piece import piece_hash
 from storb.util.query import Payload, factory_app, make_non_streamed_post
 from storb.util.store import ObjectStore
 
 logger = get_logger(__name__)
-sys.set_int_max_str_digits(0)
 
 
 class Miner(Neuron):
@@ -187,8 +187,17 @@ class Miner(Neuron):
         )
 
     async def ack_challenge(self, request: protocol.NewChallenge):
-        """Acknowledges a challenge from a validator,
-        verifies it, and enqueues it upon success.
+        """Acknowledges a challenge from a validator, verifies it, and enqueues it upon success.
+
+        Parameters
+        ----------
+        request : protocol.NewChallenge
+            The challenge request object.
+
+        Returns
+        -------
+        protocol.AckChallenge
+            The response object containing the result of the challenge acknowledgement.
         """
         logger.info(f"Received challenge {request.challenge_id}")
 
@@ -196,7 +205,19 @@ class Miner(Neuron):
             f"Verifying challenge {request.challenge_id} wih validator {request.validator_id} and signature {request.signature}"
         )
 
-        logger.debug(f"challenge: {request}")
+        if not verify_message(
+            self.metagraph,
+            request.challenge,
+            request.signature,
+            request.validator_id,
+        ):
+            logger.error(
+                f"Failed to verify challenge {request.challenge_id} with validator {request.validator_id}"
+            )
+            return protocol.AckChallenge(
+                challenge_id=request.challenge_id, accept=False
+            )
+
         try:
             deadline_dt = datetime.datetime.fromisoformat(request.challenge_deadline)
         except ValueError:
@@ -217,9 +238,15 @@ class Miner(Neuron):
         while True:
             try:
                 deadline_dt, challenge = await self.challenge_queue.get()
-            except Exception as e:
-                logger.exception("Error retrieving challenge from the queue.")
-                # We can't really do much if we fail to get from queue, skip to next loop
+            except Exception:
+                logger.exception("Error retrieving challenge from the queue, skipping.")
+                continue
+
+            if datetime.datetime.now(datetime.timezone.utc) > deadline_dt:
+                logger.info(
+                    f"Challenge {challenge.challenge_id} has expired. Skipping."
+                )
+                self.challenge_queue.task_done()
                 continue
 
             logger.info(f"Processing challenge {challenge.challenge_id}")

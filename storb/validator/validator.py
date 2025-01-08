@@ -100,7 +100,7 @@ class Validator(Neuron):
             len(self.metagraph.nodes), dtype=np.float32
         )
 
-        # Initialize Challenge keys
+        # Initialize Challenge dictionary to store challenges sent to miners
         self.challenges = {}
 
         logger.info("load_state()")
@@ -631,7 +631,7 @@ class Validator(Neuron):
             miner_hotkey, "/challenge", payload, method="POST"
         )
 
-        _, response = response
+        _, response = ...
 
         if response is None:
             logger.error(f"Failed to challenge miner {miner_id}")
