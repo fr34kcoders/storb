@@ -13,7 +13,7 @@ from storb import __spec_version__, get_spec_version
 from storb.challenge import ChallengeSystem
 from storb.config import Config
 from storb.constants import NeuronType
-from storb.dht.base_dht import DHT
+from storb.dht import DHT
 from storb.util.key_manager import KeyManager
 from storb.util.logging import get_logger
 
