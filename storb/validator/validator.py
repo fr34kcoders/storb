@@ -68,7 +68,7 @@ from storb.util.query import (
     process_response,
 )
 from storb.util.uids import get_random_hotkeys
-from storb.validator.reward import get_response_rate_scores
+from storb.validator.reward import get_challenge_scores, get_response_rate_scores
 
 logger = get_logger(__name__)
 
@@ -119,6 +119,7 @@ class Validator(Neuron):
         self.final_latency_scores = np.zeros(
             len(self.metagraph.nodes), dtype=np.float32
         )
+        self.challenge_scores = np.zeros(len(self.metagraph.nodes), dtype=np.float32)
 
         # Initialize Challenge dictionary to store challenges sent to miners
         self.challenges: dict[str, protocol.NewChallenge] = {}
@@ -299,6 +300,7 @@ class Validator(Neuron):
                     new_store_latency_scores = np.zeros((len(self.metagraph.nodes)))
                     new_ret_latency_scores = np.zeros((len(self.metagraph.nodes)))
                     new_final_latency_scores = np.zeros((len(self.metagraph.nodes)))
+                    new_challenge_scores = np.zeros((len(self.metagraph.nodes)))
                     min_len = min(len(old_hotkeys), len(self.scores))
 
                     len_store_latencies = min(
@@ -315,6 +317,9 @@ class Validator(Neuron):
                     )
                     len_final_latency_scores = min(
                         len(old_hotkeys), len(self.final_latency_scores)
+                    )
+                    len_challenge_scores = min(
+                        len(old_hotkeys), len(self.challenge_scores)
                     )
 
                     new_moving_average[:min_len] = self.scores[:min_len]
@@ -333,6 +338,9 @@ class Validator(Neuron):
                     new_final_latency_scores[:len_final_latency_scores] = (
                         self.final_latency_scores[:len_final_latency_scores]
                     )
+                    new_challenge_scores[:len_challenge_scores] = self.challenge_scores[
+                        :len_challenge_scores
+                    ]
 
                     self.scores = new_moving_average
 
@@ -341,6 +349,7 @@ class Validator(Neuron):
                     self.store_latency_scores = new_store_latency_scores
                     self.ret_latency_scores = new_ret_latency_scores
                     self.final_latency_scores = new_final_latency_scores
+                    self.challenge_scores = new_challenge_scores
                     # TODO: use debug for these
                     logger.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
                     logger.debug(
@@ -357,6 +366,9 @@ class Validator(Neuron):
                     )
                     logger.debug(
                         f"(len: {len(self.final_latency_scores)}) New latency scores: {self.final_latency_scores}"
+                    )
+                    logger.debug(
+                        f"(len: {len(self.challenge_scores)}) New challenge scores: {self.challenge_scores}"
                     )
 
         except Exception as e:
@@ -654,6 +666,7 @@ class Validator(Neuron):
             challenge_id=uuid.uuid4().hex,
             piece_id=piece_id,
             validator_id=self.uid,
+            miner_id=miner_id,
             challenge_deadline=challenge_deadline,
             public_key=self.challenge.key.rsa.public_key().public_numbers().n,
             public_exponent=self.challenge.key.rsa.public_key().public_numbers().e,
@@ -676,6 +689,16 @@ class Validator(Neuron):
         logger.info(
             f"Sent challenge {challenge_message.challenge_id} to miner {miner_id} for piece {piece_id}"
         )
+
+        async with db.get_db_connection(db_dir=self.db_dir) as conn:
+            miner_stats = await db.get_miner_stats(
+                conn=conn, miner_uid=challenge_message.miner_id
+            )
+            miner_stats["challenge_attempts"] += 1
+            await db.update_stats(
+                conn=conn, miner_uid=challenge_message.miner_id, stats=miner_stats
+            )
+
         logger.debug(f"PRF KEY: {payload.data.challenge.prf_key}")
         _, response = await self.query_miner(
             miner_hotkey, "/challenge", payload, method="POST"
@@ -703,11 +726,12 @@ class Validator(Neuron):
         - Updating the scores
         """
 
-        # TODO: challenge miners - based on: https://dl.acm.org/doi/10.1145/1315245.1315318
-
         # TODO: should we lock the db when scoring?
-        # scoring
 
+        # remove expired challenges
+        await self.remove_expired_challenges()
+
+        # scoring
         # obtain all miner stats from the validator database
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
@@ -725,6 +749,11 @@ class Validator(Neuron):
             self, miner_stats
         )
 
+        challenge_uids, self.challenge_scores = get_challenge_scores(self, miner_stats)
+
+        # TODO: error handlin'?
+        assert (response_rate_uids == challenge_uids).all()
+
         if (
             len(self.store_latencies) < len(response_rate_scores)
             or len(self.retrieve_latencies) < len(response_rate_scores)
@@ -737,10 +766,12 @@ class Validator(Neuron):
             new_store_latency_scores = np.zeros(new_len)
             new_ret_latency_scores = np.zeros(new_len)
             new_final_latency_scores = np.zeros(new_len)
+            new_challenge_scores = np.zeros(new_len)
             new_scores = np.zeros(new_len)
 
             len_lat = len(self.store_latencies)
             len_lat_scores = len(self.store_latency_scores)
+            len_challenge_scores = len(self.challenge_scores)
 
             with self.scores_lock:
                 len_scores = len(self.scores)
@@ -756,6 +787,9 @@ class Validator(Neuron):
                 new_final_latency_scores[:len_lat_scores] = self.final_latency_scores[
                     :len_lat_scores
                 ]
+                new_challenge_scores[:len_challenge_scores] = self.challenge_scores[
+                    :len_challenge_scores
+                ]
                 new_scores[:len_scores] = self.scores[:len_scores]
 
                 self.store_latencies = new_store_latencies
@@ -769,7 +803,7 @@ class Validator(Neuron):
                 self.final_latency_scores = np.nan_to_num(
                     new_final_latency_scores, nan=0.0
                 )
-
+                self.challenge_scores = np.nan_to_num(new_challenge_scores, nan=0.0)
                 self.scores = new_scores
 
         latency_scores = (
@@ -780,7 +814,11 @@ class Validator(Neuron):
         )
 
         # TODO: this should also take the "pdp challenge score" into account
-        rewards = 0.2 * self.final_latency_scores + 0.3 * response_rate_scores
+        rewards = (
+            0.2 * self.final_latency_scores
+            + 0.3 * response_rate_scores
+            + 0.5 * self.challenge_scores
+        )
 
         logger.info(f"response rate scores: {response_rate_scores}")
         logger.info(f"moving avg. store latencies: {self.store_latencies}")
@@ -790,6 +828,7 @@ class Validator(Neuron):
             f"moving avg. retrieve latency scores: {self.retrieve_latency_scores}"
         )
         logger.info(f"moving avg. latency scores: {self.final_latency_scores}")
+        logger.info(f"challenge rate scores: {self.challenge_scores}")
 
         self.update_scores(rewards, response_rate_uids)
 
@@ -1093,9 +1132,30 @@ class Validator(Neuron):
             piece_hashes=piece_hashes, processed_pieces=processed_pieces
         )
 
+    async def remove_expired_challenges(self):
+        """
+        Remove expired challenges from the `self.challenges` dictionary
+
+        Returns:
+            None
+        """
+        now = datetime.now(UTC).isoformat()
+        keys_to_remove = []
+
+        for key, challenge in self.challenges.items():
+            if challenge.challenge_deadline < now:
+                keys_to_remove.append(key)
+
+        if not keys_to_remove:
+            return
+
+        for key in keys_to_remove:
+            challenge = self.challenges[key]
+            del self.challenges[key]
+
     """API Routes"""
 
-    def verify_challenge(self, challenge_request: protocol.ProofResponse) -> bool:
+    async def verify_challenge(self, challenge_request: protocol.ProofResponse) -> bool:
         """Verify the challenge proof from the miner
 
         Parameters
@@ -1110,18 +1170,23 @@ class Validator(Neuron):
         """
 
         logger.debug(f"Verifying challenge proof: {challenge_request.challenge_id}")
+
+        challenge: protocol.NewChallenge = self.challenges.get(
+            challenge_request.challenge_id
+        )
+
+        if not challenge:
+            logger.error(f"Challenge {challenge_request.challenge_id} not found")
+            return False
+
+        async with db.get_db_connection(db_dir=self.db_dir) as conn:
+            miner_stats = await db.get_miner_stats(conn, challenge.miner_id)
+
         proof = challenge_request.proof
         try:
             proof = Proof.model_validate(proof)
         except Exception as e:
             logger.error(f"Invalid proof: {e}")
-            return False
-
-        challenge: protocol.NewChallenge = self.challenges.get(
-            challenge_request.challenge_id
-        )
-        if not challenge:
-            logger.error(f"Challenge {challenge_request.challenge_id} not found")
             return False
 
         if challenge.challenge_deadline < datetime.now(UTC).isoformat():
@@ -1151,6 +1216,15 @@ class Validator(Neuron):
         logger.info(
             f"Proof verification successful for challenge {challenge.challenge_id}"
         )
+
+        async with db.get_db_connection(db_dir=self.db_dir) as conn:
+            miner_stats["challenge_successes"] += 1
+            await db.update_stats(
+                conn=conn, miner_uid=challenge.miner_id, stats=miner_stats
+            )
+
+        # remove challenge from memory
+        del self.challenges[challenge_request.challenge_id]
 
         return True
 

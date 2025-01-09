@@ -39,3 +39,40 @@ def get_response_rate_scores(
     scores = np.asarray(weighted_rate_sums) / sum_max
 
     return uids, scores
+
+
+def get_challenge_scores(
+    self,
+    miner_stats: dict,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Returns an array of scores for the given miner stats
+
+    Parameters
+    ----------
+    miner_stats : dict
+        A dictionary of miner statistics
+
+    Returns
+    -------
+    np.ndarray
+        An array of rewards for the given query and responses.
+    """
+
+    uids = []
+    success_rates = []
+
+    uids_filter = list(range(len(self.metagraph.nodes)))
+    for uid, miner_stats in miner_stats.items():
+        if uid not in uids_filter:
+            continue
+        uids.append(uid)
+        challenge_attempts = max(miner_stats.get("challenge_attempts", 1), 1)
+        success_rate = abs(
+            miner_stats.get("challenge_successes", 0) / challenge_attempts
+        )
+        success_rates.append(success_rate)
+
+    uids = np.array(uids)
+    scores = np.asarray(success_rates) / max(*success_rates)
+
+    return uids, scores
