@@ -6,6 +6,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 
 from storb.challenge import APDPKey
+from storb.constants import DEFAULT_RSA_KEY_SIZE
 from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
@@ -15,7 +16,15 @@ class KeyManager:
     def __init__(self, key: APDPKey, pem_file: Path = None):
         """
         Key Manager for handling RSA keys and metadata.
+
+        Parameters
+        ----------
+        key : APDPKey
+            APDPKey instance to manage.
+        pem_file : Path, optional
+            Path to the PEM file to save the keys, by default None
         """
+
         if not pem_file:
             raise ValueError("PEM file path is required.")
         self.pem_file = Path(pem_file)
@@ -26,18 +35,35 @@ class KeyManager:
     def prompt_confirmation(self, message: str) -> bool:
         """
         Prompt the user for a yes/no confirmation.
+
+        Parameters
+        ----------
+        message : str
+            Message to display to the user.
+
+        Returns
+        -------
+        bool
+            True if user responds with 'yes', False otherwise.
         """
+
         while True:
             response = input(f"{message} (yes/no): ").strip().lower()
             if response in ["yes", "no"]:
                 return response == "yes"
             logger.warning("Please respond with 'yes' or 'no'.")
 
-    def initialize_keys(self, rsa_bits=2048):
+    def initialize_keys(self, rsa_bits=DEFAULT_RSA_KEY_SIZE):
         """
         Initialize the keys. If the PEM file exists, confirm with the user to either
         load the existing key or regenerate a new one.
+
+        Parameters
+        ----------
+        rsa_bits : int, optional
+            Number of bits for the RSA key, by default 2048
         """
+
         if self.pem_file.exists():
             logger.info(f"Key file {self.pem_file} found.")
             if self.prompt_confirmation("Do you want to use the existing key?"):
@@ -51,18 +77,18 @@ class KeyManager:
                 except Exception as e:
                     logger.error(f"Failed to load keys: {e}")
                     return
-            else:
-                if not self.prompt_confirmation(
-                    "Regenerating keys will invalidate previously signed pieces. Do you want to proceed?"
-                ):
-                    logger.info("Key initialization canceled by the user.")
-                    return
-        else:
+
             if not self.prompt_confirmation(
-                "No key file found. Do you want to generate new keys?"
+                "Regenerating keys will invalidate previously signed pieces. Do you want to proceed?"
             ):
                 logger.info("Key initialization canceled by the user.")
                 return
+
+        if not self.prompt_confirmation(
+            "No key file found. Do you want to generate new keys?"
+        ):
+            logger.info("Key initialization canceled by the user.")
+            return
 
         logger.info("Generating new keys...")
         self.key.generate(rsa_bits)
@@ -72,20 +98,27 @@ class KeyManager:
         """
         Save keys after confirming the password twice.
         """
+
         while True:
             password = getpass.getpass("Enter a password to encrypt the keys: ")
             confirm_password = getpass.getpass("Confirm the password: ")
-            if password != confirm_password:
-                logger.warning("Passwords do not match. Please try again.")
-            else:
+            if password == confirm_password:
                 break
+
+            logger.warning("Passwords do not match. Please try again.")
 
         self.serialize_keys(password)
 
     def serialize_keys(self, password: str):
         """
         Serialize the RSA key to PEM format and append metadata as JSON.
+
+        Parameters
+        ----------
+        password : str
+            Password to encrypt the RSA key:
         """
+
         try:
             pem_data = self.key.rsa.private_bytes(
                 encoding=serialization.Encoding.PEM,
@@ -118,7 +151,13 @@ class KeyManager:
     def load_keys(self, password: str):
         """
         Load the RSA key and metadata from the PEM file.
+
+        Parameters
+        ----------
+        password : str
+            Password to decrypt the RSA key.
         """
+
         try:
             with open(self.pem_file, "r") as f:
                 lines = f.readlines()

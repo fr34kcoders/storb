@@ -24,6 +24,12 @@ DHT_STARTUP_AND_SHUTDOWN_TIMEOUT = 5
 # Default object store dir
 STORE_DIR = "object_store"
 
+DEFAULT_RSA_KEY_SIZE = 2048
+G_CANDIDATE_RETRY = (
+    1000  # Number of times to retry g (RSA Generator) candidate generation
+)
+S_CANDIDATE_RETRY = 1000  # Number of times to retry s (RSA Secret) candidate generation
+
 
 class NeuronType(StrEnum):
     Base = "base"

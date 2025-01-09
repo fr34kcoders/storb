@@ -126,7 +126,9 @@ async def set_tracker_entry(conn: aiosqlite.Connection, entry: TrackerDHTValue):
     await conn.commit()
 
 
-async def get_tracker_entry(conn: aiosqlite.Connection, infohash: str):
+async def get_tracker_entry(
+    conn: aiosqlite.Connection, infohash: str
+) -> TrackerDHTValue | None:
     query = """
     SELECT * FROM tracker
     WHERE infohash = ?
@@ -191,7 +193,9 @@ async def set_chunk_entry(conn: aiosqlite.Connection, entry: ChunkDHTValue):
     await conn.commit()
 
 
-async def get_chunk_entry(conn: aiosqlite.Connection, chunk_hash: str):
+async def get_chunk_entry(
+    conn: aiosqlite.Connection, chunk_hash: str
+) -> ChunkDHTValue | None:
     query = """
     SELECT * FROM chunk
     WHERE chunk_hash = ?
@@ -253,7 +257,9 @@ async def set_piece_entry(conn: aiosqlite.Connection, entry: PieceDHTValue):
     await conn.commit()
 
 
-async def get_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
+async def get_piece_entry(
+    conn: aiosqlite.Connection, piece_hash: str
+) -> PieceDHTValue | None:
     query = """
     SELECT * FROM piece
     WHERE piece_hash = ?
@@ -283,26 +289,31 @@ async def delete_piece_entry(conn: aiosqlite.Connection, piece_hash: str):
     await conn.commit()
 
 
-async def get_random_piece(conn: aiosqlite.Connection, validator_id: int):
-    """
-    Randomly selects a piece from the `piece` table for a given validator.
+async def get_random_piece(
+    conn: aiosqlite.Connection, validator_id: int
+) -> PieceDHTValue | None:
+    """Randomly selects a piece from the `piece` table for a given validator.
 
     Parameters
     ----------
     conn : aiosqlite.Connection
         The database connection.
+    validator_id : int
+        The validator ID to query pieces for.
 
     Returns
     -------
     PieceEntry or None
         A random PieceEntry object if a piece is found, or None if the table is empty.
     """
+
     query = """
     SELECT * FROM piece
     WHERE validator_id = ?
     ORDER BY RANDOM()
     LIMIT 1
     """
+
     async with conn.execute(query, (validator_id,)) as cursor:
         row = await cursor.fetchone()
         if row:

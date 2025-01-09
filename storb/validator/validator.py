@@ -101,7 +101,7 @@ class Validator(Neuron):
         )
 
         # Initialize Challenge dictionary to store challenges sent to miners
-        self.challenges = {}
+        self.challenges: dict[str, protocol.NewChallenge] = {}
 
         logger.info("load_state()")
         self.load_state()
@@ -165,7 +165,7 @@ class Validator(Neuron):
         )
 
         self.app.add_api_route(
-            "/verify-challenge",
+            "/challenge/verify",
             self.verify_challenge,
             methods=["POST"],
         )
@@ -587,7 +587,18 @@ class Validator(Neuron):
         return response
 
     async def challenge_miner(self, miner_id: int, piece_id: str, tag: str):
-        """Challenge the miners to verify they are storing the pieces"""
+        """Challenge the miners to verify they are storing the pieces
+
+        Parameters
+        ----------
+        miner_id : int
+            The ID of the miner to challenge
+        piece_id : str
+            The ID of the piece to challenge the miner for
+        tag : str
+            The tag of the piece to challenge the miner for
+        """
+
         logger.debug(f"Challenging miner {miner_id} for piece {piece_id}")
         # Create the challenge message
         challenge = self.challenge.issue_challenge(tag)
@@ -627,11 +638,9 @@ class Validator(Neuron):
             f"Sent challenge {challenge_message.challenge_id} to miner {miner_id} for piece {piece_id}"
         )
         logger.debug(f"PRF KEY: {payload.data.challenge.prf_key}")
-        response = await self.query_miner(
+        _, response = await self.query_miner(
             miner_hotkey, "/challenge", payload, method="POST"
         )
-
-        _, response = ...
 
         if response is None:
             logger.error(f"Failed to challenge miner {miner_id}")
@@ -1021,6 +1030,7 @@ class Validator(Neuron):
         bool
             True if the proof is valid, False otherwise
         """
+
         logger.debug(f"Verifying challenge proof: {challenge_request.challenge_id}")
         proof = challenge_request.proof
         try:

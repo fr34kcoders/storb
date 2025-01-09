@@ -28,11 +28,11 @@ logger = get_logger(__name__)
 class Miner(Neuron):
     def __init__(self):
         super(Miner, self).__init__(NeuronType.Miner)
+
         self.object_store = ObjectStore(store_dir=self.settings.store_dir)
         self.challenge_queue: asyncio.PriorityQueue[
             tuple[datetime.datetime, protocol.NewChallenge]
         ] = asyncio.PriorityQueue()
-        self.consumer_task = None
 
     async def start(self):
         self.app_init()
@@ -52,6 +52,7 @@ class Miner(Neuron):
         """
         Starts the miner's operations in a background thread.
         """
+
         logger.info("Starting background operations in background thread.")
         self.should_exit = False
         self.thread = threading.Thread(target=self.run, daemon=True)
@@ -152,6 +153,7 @@ class Miner(Neuron):
 
     async def get_piece(self, request: protocol.Retrieve):
         """Returns a piece from storage as JSON metadata and a file."""
+
         logger.info("Retrieving piece...")
         logger.debug(f"piece_id to retrieve: {request.piece_id}")
 
@@ -199,6 +201,7 @@ class Miner(Neuron):
         protocol.AckChallenge
             The response object containing the result of the challenge acknowledgement.
         """
+
         logger.info(f"Received challenge {request.challenge_id}")
 
         logger.info(
@@ -221,7 +224,9 @@ class Miner(Neuron):
         try:
             deadline_dt = datetime.datetime.fromisoformat(request.challenge_deadline)
         except ValueError:
-            logger.error("Invalid challenge_deadline format. Must be valid ISO8601.")
+            logger.error(
+                "Invalid challenge_deadline format. Must be valid ISO 8601 string."
+            )
             return protocol.AckChallenge(
                 challenge_id=request.challenge_id, accept=False
             )
@@ -235,6 +240,7 @@ class Miner(Neuron):
 
     async def consume_challenges(self):
         """Consumes challenges from the min-heap and processes them."""
+
         while True:
             try:
                 deadline_dt, challenge = await self.challenge_queue.get()
@@ -254,8 +260,6 @@ class Miner(Neuron):
             try:
                 piece = await self.object_store.read(challenge.piece_id)
                 logger.debug(f"Piece retrieved: {piece[:10]}...")
-                if not piece:
-                    raise FileNotFoundError(f"Piece {challenge.piece_id} not found.")
             except FileNotFoundError as e:
                 logger.error(
                     f"Failed to retrieve piece {challenge.piece_id} "
@@ -273,9 +277,8 @@ class Miner(Neuron):
             tag = challenge.challenge.tag
 
             try:
-                logger.debug(f"Generating proof for challenge {challenge.challenge_id}")
                 logger.debug(
-                    f"tag: {tag} \n challenge: {challenge.challenge} \n n: {challenge.public_key}"
+                    f"Generating proof for challenge {challenge.challenge_id} \n tag: {tag} \n challenge: {challenge.challenge} \n n: {challenge.public_key}"
                 )
                 proof = self.challenge.generate_proof(
                     data=piece,
@@ -307,7 +310,7 @@ class Miner(Neuron):
                 continue
             except Exception as e:
                 logger.exception(
-                    f"Unexpected error building ProofResponse for challenge {challenge.challenge_id}"
+                    f"Unexpected error building ProofResponse for challenge {challenge.challenge_id}: {e}"
                 )
                 self.challenge_queue.task_done()
                 continue
@@ -324,7 +327,7 @@ class Miner(Neuron):
 
                 logger.debug(f"Validator hotkey: {validator_hotkey}")
                 server_addr = f"http://{node.ip}:{node.port}"
-                endpoint = "/verify-challenge"
+                endpoint = "/challenge/verify"
                 logger.debug(f"POST {server_addr}{endpoint}")
 
                 received = await make_non_streamed_post(

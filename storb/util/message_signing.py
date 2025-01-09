@@ -46,7 +46,7 @@ class PieceMessage(BaseModel):
     piece_type: PieceType
 
 
-MessageType = Union[ChunkMessage, TrackerMessage, PieceMessage, Challenge]
+MessageType = ChunkMessage | TrackerMessage | PieceMessage | Challenge
 
 
 def sign_message(message: MessageType, hotkey_keypair: Keypair) -> str:
