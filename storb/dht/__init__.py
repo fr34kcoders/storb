@@ -359,7 +359,7 @@ class DHT:
             raise RuntimeError(f"Failed to retrieve chunk entry for {chunk_hash}: {e}")
 
     # Piece DHT methods
-    async def store_piece_entry(self, piece_hash: str, value: PieceDHTValue) -> None:
+    def store_piece_entry(self, piece_hash: str, value: PieceDHTValue) -> None:
         """Store a piece entry in the DHT.
 
         Parameters

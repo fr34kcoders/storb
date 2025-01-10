@@ -1,12 +1,12 @@
 import base64
 import hashlib
 import hmac
-import os
 import random
-from math import gcd
 from typing import Optional
 
+import gmpy2
 from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.utils import int_to_bytes
@@ -96,6 +96,16 @@ class CryptoUtils:
             raise APDPError("Invalid key for PRF")
         block = int_to_bytes(input_int, out_len)
         return hmac.digest(key, block, hashlib.sha256)
+
+    @staticmethod
+    def mod_power(a, n, m):
+        r = 1
+        while n > 0:
+            if n & 1 == 1:
+                r = (r * a) % m
+            a = (a * a) % m
+            n >>= 1
+        return r
 
 
 class APDPKey(BaseModel):
@@ -202,6 +212,46 @@ class APDPTag(BaseModel):
         return value
 
 
+def generate_tag(data: bytes, keys: bytes, prf_key: bytes, g: int) -> APDPTag:
+    """Generate a tag for a given data block.
+
+    Parameters
+    ----------
+    data: bytes
+        Data block to generate tag for
+
+    Returns
+    -------
+    APDPTag
+        Generated tag
+    """
+    key = serialization.load_pem_private_key(keys, password=None)
+
+    if not data:
+        raise APDPError("No data to generate tag.")
+
+    # RSA parameters
+    n = key.public_key().public_numbers().n
+
+    # Convert entire data to integer mod n (RSA Public Modulus)
+    block_int = int.from_bytes(data, "big") % n
+
+    prf_value = CryptoUtils.prf(prf_key, 0)
+    fdh_hash = CryptoUtils.full_domain_hash(key, prf_value)
+
+    logger.debug(f"FDH hash: {fdh_hash}, PRF value: {prf_value}")
+
+    base = (fdh_hash * (g, gmpy2.mpz(block_int), n)) % n
+    d = key.private_numbers().d
+
+    try:
+        tag_value = pow(gmpy2.mpz(base), gmpy2.mpz(d), gmpy2.mpz(n))
+    except ValueError:
+        raise APDPError("Failed to compute tag value.")
+
+    return APDPTag(index=0, tag_value=tag_value, prf_value=prf_value)
+
+
 class Challenge(BaseModel):
     """Data model for APDP challenge."""
 
@@ -291,6 +341,7 @@ class ChallengeSystem:
         """Initialize the APDP challenge system."""
 
         self.key = APDPKey()
+
         logger.debug("Initialized APDP system.")
 
     def initialize_keys(self, rsa_bits=DEFAULT_RSA_KEY_SIZE):
@@ -329,30 +380,35 @@ class ChallengeSystem:
             raise APDPError("No data to generate tag.")
 
         # RSA parameters
-        n = self.key.rsa.public_key().public_numbers().n
-        p = self.key.rsa.private_numbers().p
-        q = self.key.rsa.private_numbers().q
-        phi = (p - 1) * (q - 1)
-        if phi <= 0:
-            raise APDPError("Invalid RSA parameters.")
-
-        # Convert entire data to integer mod n (RSA Public Modulus)
-        block_int = int.from_bytes(data, "big") % n
+        n = gmpy2.mpz(
+            self.key.rsa.public_key().public_numbers().n
+        )  # Use gmpy2's mpz for n
+        block_int = (
+            gmpy2.mpz(int.from_bytes(data, "big")) % n
+        )  # Convert data to gmpy2.mpz mod n
 
         prf_value = CryptoUtils.prf(self.key.prf_key, 0)
-        fdh_hash = CryptoUtils.full_domain_hash(self.key.rsa, prf_value)
+        fdh_hash = gmpy2.mpz(
+            CryptoUtils.full_domain_hash(self.key.rsa, prf_value)
+        )  # Ensure gmpy2 type
 
         logger.debug(f"FDH hash: {fdh_hash}, PRF value: {prf_value}")
 
-        base = (fdh_hash * pow(self.key.g, block_int, n)) % n
-        d = self.key.rsa.private_numbers().d
+        g = gmpy2.mpz(self.key.g)  # Convert g to gmpy2.mpz
+        base = (
+            fdh_hash * gmpy2.powmod(g, block_int, n)
+        ) % n  # Use gmpy2.powmod for modular exponentiation
+
+        d = gmpy2.mpz(
+            self.key.rsa.private_numbers().d
+        )  # Ensure private exponent is gmpy2.mpz
 
         try:
-            tag_value = pow(base, d, n)
+            tag_value = gmpy2.powmod(base, d, n)  # Modular exponentiation for tag value
         except ValueError:
             raise APDPError("Failed to compute tag value.")
 
-        return APDPTag(index=0, tag_value=tag_value, prf_value=prf_value)
+        return APDPTag(index=0, tag_value=int(tag_value), prf_value=prf_value)
 
     def issue_challenge(self, tag: APDPTag) -> Challenge:
         """Issue a challenge for a given tag.
@@ -377,7 +433,7 @@ class ChallengeSystem:
         s = random.randint(2, n - 1)
 
         attempt_count = 0
-        while gcd(s, n) != 1:
+        while gmpy2.gcd(s, n) != 1:
             s = random.randint(2, n - 1)
             attempt_count += 1
             if attempt_count > S_CANDIDATE_RETRY:

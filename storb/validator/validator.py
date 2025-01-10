@@ -1,4 +1,6 @@
 import asyncio
+import concurrent
+import concurrent.futures
 import copy
 import hashlib
 import sys
@@ -7,6 +9,7 @@ import time
 import typing
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import AsyncGenerator, Literal, override
 
 import httpx
@@ -551,7 +554,7 @@ class Validator(Neuron):
                         )
                         # verify the signature
                         if not verify_message(
-                            self.metagraph, message, signature, piece.miner_id
+                            self.metagraph, message, signature, piece.validator_id
                         ):
                             logger.error(
                                 f"Signature verification failed for piece_id {piece_id}"
@@ -853,6 +856,10 @@ class Validator(Neuron):
 
         return await asyncio.gather(*uid_to_query_task.values())
 
+    def process_tag(self, data: bytes) -> str:
+        tag = self.challenge.generate_tag(data)
+        return tag.model_dump_json()
+
     async def process_pieces(
         self, pieces: list[Piece], hotkeys: list[str]
     ) -> tuple[list[str], list[tuple[str, bytes, int]]]:
@@ -889,62 +896,124 @@ class Validator(Neuron):
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_multiple_miner_stats(conn, uids)
 
+        def process_piece(
+            uid: int,
+            piece_idx: int,
+            piece_hashes: list[str],
+            response,
+            recv_payload,
+            executor: concurrent.futures.ProcessPoolExecutor,
+        ):
+            # Verify piece hash
+            logger.debug(f"uid: {uid} piece_idx: {piece_idx}")
+            true_hash = piece_hashes[piece_idx]
+            miner_stats[uid]["store_attempts"] += 1
+            logger.debug(f"uid: {uid} response: {response}")
+
+            if response.piece_id == true_hash:
+                latencies[uid] = recv_payload.time_elapsed / len(pieces[piece_idx].data)
+                miner_stats[uid]["store_successes"] += 1
+                miner_stats[uid]["total_successes"] += 1
+                logger.debug(f"Miner {uid} successfully stored {true_hash}")
+
+                try:
+                    tag = executor.submit(
+                        self.process_tag, pieces[piece_idx].data
+                    ).result()
+                    logger.critical(f"tag: {tag}")
+                except Exception as e:
+                    logger.error(f"Failed to generate tag: {e}")
+                    raise
+
+                message = PieceMessage(
+                    piece_hash=true_hash,
+                    miner_id=uid,
+                    chunk_idx=pieces[piece_idx].chunk_idx,
+                    piece_idx=pieces[piece_idx].piece_idx,
+                    piece_type=pieces[piece_idx].piece_type,
+                )
+                try:
+                    signature = sign_message(message, self.keypair)
+                except Exception as e:
+                    logger.error(f"Failed to sign message: {e}")
+                    raise
+                    # Now store the piece in the DHT with the *actual* miner_id = uid
+                try:
+                    self.dht.store_piece_entry(
+                        piece_hash=true_hash,
+                        value=PieceDHTValue(
+                            piece_hash=true_hash,
+                            validator_id=self.uid,
+                            miner_id=uid,
+                            chunk_idx=pieces[piece_idx].chunk_idx,
+                            piece_idx=pieces[piece_idx].piece_idx,
+                            piece_type=pieces[piece_idx].piece_type,
+                            tag=tag,
+                            signature=signature,
+                        ),
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to store piece entry: {e}")
+                    raise
+
+        async def process_batch(
+            batch,
+            piece_idx: int,
+            piece_hashes: list[str],
+            executor: concurrent.futures.ProcessPoolExecutor,
+        ):
+            semaphore = asyncio.Semaphore(100)
+
+            async def limited_task(task):
+                async with semaphore:
+                    await task
+
+            tasks = []
+            for uid, recv_payload in batch:
+                if not recv_payload:
+                    continue
+                response = recv_payload.data
+                if not response:
+                    continue
+                tasks.append(
+                    limited_task(
+                        asyncio.get_event_loop().run_in_executor(
+                            executor,
+                            partial(
+                                process_piece,
+                                uid,
+                                piece_idx,
+                                piece_hashes,
+                                response,
+                                recv_payload,
+                                executor,
+                            ),
+                        )
+                    )
+                )
+            await asyncio.gather(*tasks)
+
         async def handle_batch_requests():
             """Send batch requests and update miner stats."""
 
             nonlocal to_query
             tasks = [task for _, task in to_query]
             batch_responses = await asyncio.gather(*tasks)
-            for piece_idx, batch in enumerate(batch_responses):
-                for uid, recv_payload in batch:
-                    if not recv_payload:
-                        continue
-                    response = recv_payload.data
-                    miner_stats[uid]["store_attempts"] += 1
-                    logger.debug(f"uid: {uid} response: {response}")
-                    if not response:
-                        continue
-
-                    # Verify piece hash
-                    true_hash = piece_hashes[piece_idx]
-                    if response.piece_id == true_hash:
-                        latencies[uid] = recv_payload.time_elapsed / len(
-                            pieces[piece_idx].data
+            with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
+                batch_tasks = []
+                for piece_idx, batch in enumerate(batch_responses):
+                    logger.debug(f"Processing batch {piece_idx}...")
+                    batch_tasks.append(
+                        asyncio.create_task(
+                            process_batch(
+                                batch=batch,
+                                piece_idx=piece_idx,
+                                piece_hashes=piece_hashes,
+                                executor=executor,
+                            )
                         )
-                        miner_stats[uid]["store_successes"] += 1
-                        miner_stats[uid]["total_successes"] += 1
-                        logger.debug(f"Miner {uid} successfully stored {true_hash}")
-
-                        tag = self.challenge.generate_tag(pieces[piece_idx].data)
-                        tag = tag.model_dump_json()
-
-                        message = PieceMessage(
-                            piece_hash=true_hash,
-                            miner_id=uid,
-                            chunk_idx=pieces[piece_idx].chunk_idx,
-                            piece_idx=pieces[piece_idx].piece_idx,
-                            piece_type=pieces[piece_idx].piece_type,
-                        )
-                        try:
-                            signature = sign_message(message, self.keypair)
-                        except Exception as e:
-                            logger.error(f"Failed to sign message: {e}")
-                            raise
-                        # Now store the piece in the DHT with the *actual* miner_id = uid
-                        await self.dht.store_piece_entry(
-                            piece_hash=true_hash,
-                            value=PieceDHTValue(
-                                piece_hash=true_hash,
-                                validator_id=self.uid,
-                                miner_id=uid,  # The actual miner who stored it
-                                chunk_idx=pieces[piece_idx].chunk_idx,
-                                piece_idx=pieces[piece_idx].piece_idx,
-                                piece_type=pieces[piece_idx].piece_type,
-                                tag=tag,
-                                signature=signature,
-                            ),
-                        )
-
+                    )
+                await asyncio.gather(*batch_tasks)
             to_query = []  # Reset the batch
 
         for idx, piece_info in enumerate(pieces):
@@ -1274,7 +1343,7 @@ class Validator(Neuron):
             consumer.cancel()
 
             await asyncio.gather(consumer, return_exceptions=True)
-
+            logger.critical(f"total piece hashes: {len(piece_hashes)}")
             infohash, _ = generate_infohash(
                 filename, timestamp, chunk_size, filesize, list(piece_hashes)
             )

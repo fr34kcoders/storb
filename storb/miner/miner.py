@@ -356,7 +356,7 @@ class Miner(Neuron):
                 )
             except Exception as e:
                 logger.exception(
-                    f"Unexpected error sending proof for challenge {challenge.challenge_id}"
+                    f"Unexpected error sending proof for challenge {challenge.challenge_id}: {e}"
                 )
             finally:
                 self.challenge_queue.task_done()
