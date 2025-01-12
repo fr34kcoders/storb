@@ -1,15 +1,13 @@
 import asyncio
-import concurrent
-import concurrent.futures
 import copy
 import hashlib
+import queue
 import sys
 import threading
 import time
 import typing
 import uuid
 from datetime import UTC, datetime, timedelta
-from functools import partial
 from typing import AsyncGenerator, Literal, override
 
 import httpx
@@ -23,6 +21,7 @@ from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
 from fiber.encrypted.validator import handshake
+from pydantic import BaseModel
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
@@ -34,6 +33,7 @@ from storb import protocol
 from storb.challenge import APDPTag, Proof
 from storb.constants import (
     NUM_UIDS_QUERY,
+    PIECE_CONSUMERS,
     QUERY_TIMEOUT,
     NeuronType,
 )
@@ -54,6 +54,7 @@ from storb.util.middleware import FileSizeMiddleware, LoggerMiddleware
 from storb.util.piece import (
     EncodedChunk,
     Piece,
+    PieceType,
     encode_chunk,
     piece_hash,
     piece_length,
@@ -70,6 +71,15 @@ from storb.util.uids import get_random_hotkeys
 from storb.validator.reward import get_response_rate_scores
 
 logger = get_logger(__name__)
+
+
+class PieceTask(BaseModel):
+    miner_uid: int
+    piece_idx: int
+    piece_hash: str
+    data: bytes
+    chunk_idx: int
+    piece_type: PieceType
 
 
 class Validator(Neuron):
@@ -110,6 +120,25 @@ class Validator(Neuron):
         self.load_state()
 
         self.loop = asyncio.get_event_loop()
+        self.piece_queue = queue.Queue()
+        self.consumer_threads: list[threading.Thread] = []
+        self.start_piece_consumers()
+
+    def start_piece_consumers(self, num_consumers: int = PIECE_CONSUMERS):
+        """Start threads that continuously consume items from self.piece_queue
+
+        Parameters
+        ----------
+        num_consumers : int, optional
+            Number of threads to start, by default PIECE_CONSUMERS
+        """
+
+        for i in range(num_consumers):
+            t = threading.Thread(
+                target=self.consume_piece_queue, name=f"PieceConsumer-{i+1}"
+            )
+            t.start()
+            self.consumer_threads.append(t)
 
     async def start(self):
         self.app_init()
@@ -860,9 +889,58 @@ class Validator(Neuron):
         tag = self.challenge.generate_tag(data)
         return tag.model_dump_json()
 
+    # Piece Queue Consumer
+    def consume_piece_queue(self):
+        """Consume the piece queue and store the pieces in the DHT"""
+        while True:
+            try:
+                piece_task = self.piece_queue.get()
+                try:
+                    tag = self.process_tag(piece_task.data)
+                except Exception as e:
+                    logger.error(f"Error processing tag: {e}")
+                    self.piece_queue.task_done()
+                    continue
+                try:
+                    message = PieceMessage(
+                        piece_hash=piece_task.piece_hash,
+                        miner_id=piece_task.miner_uid,
+                        chunk_idx=piece_task.chunk_idx,
+                        piece_idx=piece_task.piece_idx,
+                        piece_type=piece_task.piece_type,
+                    )
+
+                    signature = sign_message(message, self.keypair)
+
+                except Exception as e:
+                    logger.error(f"Error signing message: {e}")
+                    self.piece_queue.task_done()
+                    continue
+
+                self.dht.store_piece_entry(
+                    piece_hash=piece_task.piece_hash,
+                    value=PieceDHTValue(
+                        piece_hash=piece_task.piece_hash,
+                        validator_id=self.uid,
+                        miner_id=piece_task.miner_uid,
+                        chunk_idx=piece_task.chunk_idx,
+                        piece_idx=piece_task.piece_idx,
+                        piece_type=piece_task.piece_type,
+                        tag=tag,
+                        signature=signature,
+                    ),
+                )
+                self.piece_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error consuming piece task: {e}")
+                self.piece_queue.task_done()
+                continue
+
     async def process_pieces(
-        self, pieces: list[Piece], hotkeys: list[str]
-    ) -> tuple[list[str], list[tuple[str, bytes, int]]]:
+        self,
+        pieces: list[Piece],
+        hotkeys: list[str],
+    ) -> tuple[list[str], list[protocol.ProcessedPieceInfo]]:
         """Process pieces of data by generating their hashes, encoding them,
         and querying miners.
 
@@ -880,14 +958,12 @@ class Validator(Neuron):
             - A list of piece hashes.
             - A list of processed pieces (ptype, data, pad).
         """
-
         piece_hashes: list[str] = []
         processed_pieces: list[protocol.ProcessedPieceInfo] = []
         to_query = []
         curr_batch_size = 0
 
         uids = []
-
         latencies = np.full(len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32)
 
         for hotkey in hotkeys:
@@ -896,126 +972,49 @@ class Validator(Neuron):
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_multiple_miner_stats(conn, uids)
 
-        def process_piece(
-            uid: int,
-            piece_idx: int,
-            piece_hashes: list[str],
-            response,
-            recv_payload,
-            executor: concurrent.futures.ProcessPoolExecutor,
-        ):
-            # Verify piece hash
-            logger.debug(f"uid: {uid} piece_idx: {piece_idx}")
-            true_hash = piece_hashes[piece_idx]
-            miner_stats[uid]["store_attempts"] += 1
-            logger.debug(f"uid: {uid} response: {response}")
-
-            if response.piece_id == true_hash:
-                latencies[uid] = recv_payload.time_elapsed / len(pieces[piece_idx].data)
-                miner_stats[uid]["store_successes"] += 1
-                miner_stats[uid]["total_successes"] += 1
-                logger.debug(f"Miner {uid} successfully stored {true_hash}")
-
-                try:
-                    tag = executor.submit(
-                        self.process_tag, pieces[piece_idx].data
-                    ).result()
-                    logger.critical(f"tag: {tag}")
-                except Exception as e:
-                    logger.error(f"Failed to generate tag: {e}")
-                    raise
-
-                message = PieceMessage(
-                    piece_hash=true_hash,
-                    miner_id=uid,
-                    chunk_idx=pieces[piece_idx].chunk_idx,
-                    piece_idx=pieces[piece_idx].piece_idx,
-                    piece_type=pieces[piece_idx].piece_type,
-                )
-                try:
-                    signature = sign_message(message, self.keypair)
-                except Exception as e:
-                    logger.error(f"Failed to sign message: {e}")
-                    raise
-                    # Now store the piece in the DHT with the *actual* miner_id = uid
-                try:
-                    self.dht.store_piece_entry(
-                        piece_hash=true_hash,
-                        value=PieceDHTValue(
-                            piece_hash=true_hash,
-                            validator_id=self.uid,
-                            miner_id=uid,
-                            chunk_idx=pieces[piece_idx].chunk_idx,
-                            piece_idx=pieces[piece_idx].piece_idx,
-                            piece_type=pieces[piece_idx].piece_type,
-                            tag=tag,
-                            signature=signature,
-                        ),
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to store piece entry: {e}")
-                    raise
-
-        async def process_batch(
-            batch,
-            piece_idx: int,
-            piece_hashes: list[str],
-            executor: concurrent.futures.ProcessPoolExecutor,
-        ):
-            semaphore = asyncio.Semaphore(100)
-
-            async def limited_task(task):
-                async with semaphore:
-                    await task
-
-            tasks = []
-            for uid, recv_payload in batch:
-                if not recv_payload:
-                    continue
-                response = recv_payload.data
-                if not response:
-                    continue
-                tasks.append(
-                    limited_task(
-                        asyncio.get_event_loop().run_in_executor(
-                            executor,
-                            partial(
-                                process_piece,
-                                uid,
-                                piece_idx,
-                                piece_hashes,
-                                response,
-                                recv_payload,
-                                executor,
-                            ),
-                        )
-                    )
-                )
-            await asyncio.gather(*tasks)
-
         async def handle_batch_requests():
-            """Send batch requests and update miner stats."""
-
+            """Send batch requests for pieces in `to_query` and update miner stats accordingly."""
             nonlocal to_query
+
             tasks = [task for _, task in to_query]
+
             batch_responses = await asyncio.gather(*tasks)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=100) as executor:
-                batch_tasks = []
-                for piece_idx, batch in enumerate(batch_responses):
-                    logger.debug(f"Processing batch {piece_idx}...")
-                    batch_tasks.append(
-                        asyncio.create_task(
-                            process_batch(
-                                batch=batch,
-                                piece_idx=piece_idx,
-                                piece_hashes=piece_hashes,
-                                executor=executor,
-                            )
+
+            for i, batch in enumerate(batch_responses):
+                real_piece_idx = to_query[i][0]
+
+                for uid, recv_payload in batch:
+                    if not recv_payload or not recv_payload.data:
+                        continue
+
+                    response = recv_payload.data
+                    miner_stats[uid]["store_attempts"] += 1
+                    logger.debug(f"uid: {uid} response: {response}")
+
+                    # Verify piece hash
+                    true_hash = piece_hashes[real_piece_idx]
+                    self.piece_queue.put(
+                        PieceTask(
+                            miner_uid=uid,
+                            piece_idx=real_piece_idx,
+                            piece_hash=true_hash,
+                            data=pieces[real_piece_idx].data,
+                            chunk_idx=pieces[real_piece_idx].chunk_idx,
+                            piece_type=pieces[real_piece_idx].piece_type,
                         )
                     )
-                await asyncio.gather(*batch_tasks)
-            to_query = []  # Reset the batch
 
+                    if response.piece_id == true_hash:
+                        latencies[uid] = recv_payload.time_elapsed / len(
+                            pieces[real_piece_idx].data
+                        )
+                        miner_stats[uid]["store_successes"] += 1
+                        miner_stats[uid]["total_successes"] += 1
+
+            # Reset for the next batch
+            to_query = []
+
+        # Main loop to process each piece
         for idx, piece_info in enumerate(pieces):
             p_hash = piece_hash(piece_info.data)
             piece_hashes.append(p_hash)
@@ -1029,13 +1028,13 @@ class Validator(Neuron):
                 )
             )
 
-            # Log details
             logger.debug(
-                f"piece: {idx} | type: {piece_info.piece_type} | hash: {p_hash} | b64 preview: {piece_info.data[:10]}"
+                f"piece: {idx} | type: {piece_info.piece_type} | hash: {p_hash} "
+                f"| b64 preview: {piece_info.data[:10]}"
             )
-
             logger.debug(f"hotkeys to query: {hotkeys}")
 
+            # Create a storage request task for this piece
             task = asyncio.create_task(
                 self.query_multiple_miners(
                     miner_hotkeys=hotkeys,
@@ -1051,35 +1050,36 @@ class Validator(Neuron):
                     method="POST",
                 )
             )
-            to_query.append((idx, task))  # Pair index with the task
+            # Store (piece_index, task) in to_query
+            to_query.append((idx, task))
             curr_batch_size += 1
 
-            # Send batch requests if batch size is reached
+            # If batch size is reached, send the batch
             if curr_batch_size >= self.settings.validator.query.batch_size:
                 logger.info(f"Sending {curr_batch_size} batched requests...")
                 await handle_batch_requests()
                 curr_batch_size = 0
+            logger.debug(f"Queued piece {idx} for storage with miner UIDs: {uids}")
 
-        # Handle any remaining queries
+        # Handle any remaining queries in the final batch
         if to_query:
             logger.info(f"Sending remaining {curr_batch_size} batched requests...")
             await handle_batch_requests()
 
         logger.debug(f"Processed {len(piece_hashes)} pieces.")
 
+        # Update store latency data
         alpha: float = self.settings.neuron.response_time_alpha
-        self.store_latencies = (alpha * latencies) + (1 - alpha) * self.store_latencies
+        self.store_latencies = alpha * latencies + (1 - alpha) * self.store_latencies
         self.store_latency_scores = 1 - (
             self.store_latencies / self.store_latencies.max()
         )
 
-        # update miner stats table in db
+        # Update miner stats in the database
         async with db.get_db_connection(self.db_dir) as conn:
             for miner_uid in uids:
                 await db.update_stats(
-                    conn,
-                    miner_uid=miner_uid,
-                    stats=miner_stats[miner_uid],
+                    conn, miner_uid=miner_uid, stats=miner_stats[miner_uid]
                 )
 
         return piece_hashes, processed_pieces
