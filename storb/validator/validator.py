@@ -350,7 +350,6 @@ class Validator(Neuron):
                     self.ret_latency_scores = new_ret_latency_scores
                     self.final_latency_scores = new_final_latency_scores
                     self.challenge_scores = new_challenge_scores
-                    # TODO: use debug for these
                     logger.debug(f"(len: {len(self.scores)}) New scores: {self.scores}")
                     logger.debug(
                         f"(len: {len(self.store_latencies)}) New store latencies: {self.store_latencies}"
@@ -813,7 +812,6 @@ class Validator(Neuron):
             latency_scores.max() if latency_scores.max() != 0 else 1
         )
 
-        # TODO: this should also take the "pdp challenge score" into account
         rewards = (
             0.2 * self.final_latency_scores
             + 0.3 * response_rate_scores

@@ -15,7 +15,7 @@ def get_response_rate_scores(
     Returns
     -------
     np.ndarray
-        An array of rewards for the given query and responses.
+        Arrays of uids and rewards for the given query and responses.
     """
 
     uids = []
