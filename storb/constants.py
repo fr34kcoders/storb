@@ -1,12 +1,13 @@
 from enum import StrEnum
 
 # TODO: Make this variable dependent on file/piece size?
-QUERY_TIMEOUT = 3
+QUERY_TIMEOUT = 10
 NUM_UIDS_QUERY = 10  # Default number of uids to query per store request
 QUERY_RATE = 10  # In blocks
 MAX_QUERY_BATCH_SIZE = 20  # Default max query batch size
-PIECE_CONSUMERS = 5  # Number of threads to spawn for piece consumption
-
+PIECE_CONSUMERS = (
+    1  # Number of consumers for piece processing. DONT SET TO HIGHER THAN 1
+)
 MIN_PIECE_SIZE = 16 * 1024  # 16 KiB
 MAX_PIECE_SIZE = 256 * 1024 * 1024  # 256 MiB
 PIECE_LENGTH_SCALING = 0.5
