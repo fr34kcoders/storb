@@ -7,6 +7,7 @@ import threading
 import time
 import typing
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import AsyncGenerator, Literal, override
 
@@ -21,7 +22,6 @@ from fiber.encrypted.miner.endpoints.handshake import (
     factory_router as get_subnet_router,
 )
 from fiber.encrypted.validator import handshake
-from pydantic import BaseModel
 from starlette.status import (
     HTTP_400_BAD_REQUEST,
     HTTP_404_NOT_FOUND,
@@ -73,13 +73,20 @@ from storb.validator.reward import get_response_rate_scores
 logger = get_logger(__name__)
 
 
-class PieceTask(BaseModel):
+@dataclass
+class PieceTask:
     miner_uid: int
     piece_idx: int
     piece_hash: str
     data: bytes
     chunk_idx: int
     piece_type: PieceType
+
+
+@dataclass
+class ProcessedPieceResponse:
+    piece_hashes: list[str]
+    processed_pieces: list[protocol.ProcessedPieceInfo]
 
 
 class Validator(Neuron):
@@ -940,7 +947,7 @@ class Validator(Neuron):
         self,
         pieces: list[Piece],
         hotkeys: list[str],
-    ) -> tuple[list[str], list[protocol.ProcessedPieceInfo]]:
+    ) -> ProcessedPieceResponse:
         """Process pieces of data by generating their hashes, encoding them,
         and querying miners.
 
@@ -1082,7 +1089,9 @@ class Validator(Neuron):
                     conn, miner_uid=miner_uid, stats=miner_stats[miner_uid]
                 )
 
-        return piece_hashes, processed_pieces
+        return ProcessedPieceResponse(
+            piece_hashes=piece_hashes, processed_pieces=processed_pieces
+        )
 
     """API Routes"""
 
@@ -1280,9 +1289,11 @@ class Validator(Neuron):
 
                         encoded_chunk = encode_chunk(chunk_buffer, chunk_idx)
 
-                        sent_piece_hashes, _ = await self.process_pieces(
+                        response = await self.process_pieces(
                             pieces=encoded_chunk.pieces, hotkeys=hotkeys
                         )
+
+                        sent_piece_hashes = response.piece_hashes
 
                         dht_chunk = ChunkDHTValue(
                             validator_id=validator_id,
