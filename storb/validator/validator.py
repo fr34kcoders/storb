@@ -1,11 +1,14 @@
 import asyncio
 import copy
 import hashlib
+import queue
 import sys
 import threading
 import time
 import typing
-from datetime import UTC, datetime
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import AsyncGenerator, Literal, override
 
 import httpx
@@ -27,8 +30,10 @@ from starlette.status import (
 
 import storb.db as db
 from storb import protocol
+from storb.challenge import APDPTag, Proof
 from storb.constants import (
     NUM_UIDS_QUERY,
+    PIECE_CONSUMERS,
     QUERY_TIMEOUT,
     NeuronType,
 )
@@ -49,6 +54,7 @@ from storb.util.middleware import FileSizeMiddleware, LoggerMiddleware
 from storb.util.piece import (
     EncodedChunk,
     Piece,
+    PieceType,
     encode_chunk,
     piece_hash,
     piece_length,
@@ -65,6 +71,22 @@ from storb.util.uids import get_random_hotkeys
 from storb.validator.reward import get_response_rate_scores
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class PieceTask:
+    miner_uid: int
+    piece_idx: int
+    piece_hash: str
+    data: bytes
+    chunk_idx: int
+    piece_type: PieceType
+
+
+@dataclass
+class ProcessedPieceResponse:
+    piece_hashes: list[str]
+    processed_pieces: list[protocol.ProcessedPieceInfo]
 
 
 class Validator(Neuron):
@@ -98,10 +120,32 @@ class Validator(Neuron):
             len(self.metagraph.nodes), dtype=np.float32
         )
 
+        # Initialize Challenge dictionary to store challenges sent to miners
+        self.challenges: dict[str, protocol.NewChallenge] = {}
+
         logger.info("load_state()")
         self.load_state()
 
         self.loop = asyncio.get_event_loop()
+        self.piece_queue = queue.Queue()
+        self.consumer_threads: list[threading.Thread] = []
+        self.start_piece_consumers()
+
+    def start_piece_consumers(self, num_consumers: int = PIECE_CONSUMERS):
+        """Start threads that continuously consume items from self.piece_queue
+
+        Parameters
+        ----------
+        num_consumers : int, optional
+            Number of threads to start, by default PIECE_CONSUMERS
+        """
+
+        for i in range(num_consumers):
+            t = threading.Thread(
+                target=self.consume_piece_queue, name=f"PieceConsumer-{i+1}"
+            )
+            t.start()
+            self.consumer_threads.append(t)
 
     async def start(self):
         self.app_init()
@@ -156,6 +200,12 @@ class Validator(Neuron):
         self.app.add_api_route(
             "/miners",
             self.get_miners_for_file,
+            methods=["POST"],
+        )
+
+        self.app.add_api_route(
+            "/challenge/verify",
+            self.verify_challenge,
             methods=["POST"],
         )
 
@@ -540,7 +590,7 @@ class Validator(Neuron):
                         )
                         # verify the signature
                         if not verify_message(
-                            self.metagraph, message, signature, piece.miner_id
+                            self.metagraph, message, signature, piece.validator_id
                         ):
                             logger.error(
                                 f"Signature verification failed for piece_id {piece_id}"
@@ -575,6 +625,71 @@ class Validator(Neuron):
 
         return response
 
+    async def challenge_miner(self, miner_id: int, piece_id: str, tag: str):
+        """Challenge the miners to verify they are storing the pieces
+
+        Parameters
+        ----------
+        miner_id : int
+            The ID of the miner to challenge
+        piece_id : str
+            The ID of the piece to challenge the miner for
+        tag : str
+            The tag of the piece to challenge the miner for
+        """
+
+        logger.debug(f"Challenging miner {miner_id} for piece {piece_id}")
+        # Create the challenge message
+        challenge = self.challenge.issue_challenge(tag)
+        try:
+            signature = sign_message(challenge, self.keypair)
+        except Exception as e:
+            logger.error(f"Failed to sign challenge: {e}")
+            return
+
+        challenge_deadline: datetime = datetime.now(UTC) + timedelta(minutes=15)
+        challenge_deadline = challenge_deadline.isoformat()
+
+        challenge_message = protocol.NewChallenge(
+            challenge_id=uuid.uuid4().hex,
+            piece_id=piece_id,
+            validator_id=self.uid,
+            challenge_deadline=challenge_deadline,
+            public_key=self.challenge.key.rsa.public_key().public_numbers().n,
+            public_exponent=self.challenge.key.rsa.public_key().public_numbers().e,
+            challenge=challenge,
+            signature=signature,
+        )
+
+        logger.debug(f"Challenge message: {challenge_message}")
+        # Send the challenge to the miner
+        miner_hotkey = list(self.metagraph.nodes.keys())[miner_id]
+        if miner_hotkey is None:
+            logger.error(f"Miner {miner_id} not found in metagraph")
+            return
+
+        payload = Payload(
+            data=challenge_message,
+            file=None,
+            time_elapsed=0,
+        )
+        logger.info(
+            f"Sent challenge {challenge_message.challenge_id} to miner {miner_id} for piece {piece_id}"
+        )
+        logger.debug(f"PRF KEY: {payload.data.challenge.prf_key}")
+        _, response = await self.query_miner(
+            miner_hotkey, "/challenge", payload, method="POST"
+        )
+
+        if response is None:
+            logger.error(f"Failed to challenge miner {miner_id}")
+            return
+
+        self.challenges[challenge_message.challenge_id] = challenge_message
+
+        logger.debug(f"Received response from miner {miner_id}, response: {response}")
+        logger.info(f"Successfully challenged miner {miner_id}")
+
     # TODO: naming could be better, although this is the Bittensor default
     async def forward(self):
         """The forward function is called by the validator every time step.
@@ -596,6 +711,14 @@ class Validator(Neuron):
         # obtain all miner stats from the validator database
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
+            challenge_piece = await db.get_random_piece(conn, self.uid)
+
+        if challenge_piece is not None:
+            await self.challenge_miner(
+                challenge_piece.miner_id,
+                challenge_piece.piece_hash,
+                challenge_piece.tag,
+            )
 
         # calculate the score(s) for uids given their stats
         response_rate_uids, response_rate_scores = get_response_rate_scores(
@@ -733,6 +856,7 @@ class Validator(Neuron):
                 data = None
                 if json_data or json_data != {"detail": "Not Found"}:
                     try:
+                        logger.debug(f"Payload data: {json_data}")
                         data = payload.data.model_validate(json_data)
                     except Exception:
                         logger.warning(
@@ -768,11 +892,62 @@ class Validator(Neuron):
 
         return await asyncio.gather(*uid_to_query_task.values())
 
+    def process_tag(self, data: bytes) -> str:
+        tag = self.challenge.generate_tag(data)
+        return tag.model_dump_json()
+
+    # Piece Queue Consumer
+    def consume_piece_queue(self):
+        """Consume the piece queue and store the pieces in the DHT"""
+        while True:
+            try:
+                piece_task = self.piece_queue.get()
+                try:
+                    tag = self.process_tag(piece_task.data)
+                except Exception as e:
+                    logger.error(f"Error processing tag: {e}")
+                    self.piece_queue.task_done()
+                    continue
+                try:
+                    message = PieceMessage(
+                        piece_hash=piece_task.piece_hash,
+                        miner_id=piece_task.miner_uid,
+                        chunk_idx=piece_task.chunk_idx,
+                        piece_idx=piece_task.piece_idx,
+                        piece_type=piece_task.piece_type,
+                    )
+
+                    signature = sign_message(message, self.keypair)
+
+                except Exception as e:
+                    logger.error(f"Error signing message: {e}")
+                    self.piece_queue.task_done()
+                    continue
+
+                self.dht.store_piece_entry(
+                    piece_hash=piece_task.piece_hash,
+                    value=PieceDHTValue(
+                        piece_hash=piece_task.piece_hash,
+                        validator_id=self.uid,
+                        miner_id=piece_task.miner_uid,
+                        chunk_idx=piece_task.chunk_idx,
+                        piece_idx=piece_task.piece_idx,
+                        piece_type=piece_task.piece_type,
+                        tag=tag,
+                        signature=signature,
+                    ),
+                )
+                self.piece_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error consuming piece task: {e}")
+                self.piece_queue.task_done()
+                continue
+
     async def process_pieces(
         self,
         pieces: list[Piece],
         hotkeys: list[str],
-    ) -> tuple[list[str], list[tuple[str, bytes, int]]]:
+    ) -> ProcessedPieceResponse:
         """Process pieces of data by generating their hashes, encoding them,
         and querying miners.
 
@@ -790,14 +965,12 @@ class Validator(Neuron):
             - A list of piece hashes.
             - A list of processed pieces (ptype, data, pad).
         """
-
         piece_hashes: list[str] = []
         processed_pieces: list[protocol.ProcessedPieceInfo] = []
         to_query = []
         curr_batch_size = 0
 
         uids = []
-
         latencies = np.full(len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32)
 
         for hotkey in hotkeys:
@@ -807,33 +980,48 @@ class Validator(Neuron):
             miner_stats = await db.get_multiple_miner_stats(conn, uids)
 
         async def handle_batch_requests():
-            """Send batch requests and update miner stats."""
-
+            """Send batch requests for pieces in `to_query` and update miner stats accordingly."""
             nonlocal to_query
+
             tasks = [task for _, task in to_query]
+
             batch_responses = await asyncio.gather(*tasks)
-            for piece_idx, batch in enumerate(batch_responses):
+
+            for i, batch in enumerate(batch_responses):
+                real_piece_idx = to_query[i][0]
+
                 for uid, recv_payload in batch:
-                    if not recv_payload:
+                    if not recv_payload or not recv_payload.data:
                         continue
+
                     response = recv_payload.data
                     miner_stats[uid]["store_attempts"] += 1
                     logger.debug(f"uid: {uid} response: {response}")
-                    if not response:
-                        continue
 
                     # Verify piece hash
-                    true_hash = piece_hashes[piece_idx]
+                    true_hash = piece_hashes[real_piece_idx]
+                    self.piece_queue.put(
+                        PieceTask(
+                            miner_uid=uid,
+                            piece_idx=real_piece_idx,
+                            piece_hash=true_hash,
+                            data=pieces[real_piece_idx].data,
+                            chunk_idx=pieces[real_piece_idx].chunk_idx,
+                            piece_type=pieces[real_piece_idx].piece_type,
+                        )
+                    )
+
                     if response.piece_id == true_hash:
                         latencies[uid] = recv_payload.time_elapsed / len(
-                            pieces[piece_idx].data
+                            pieces[real_piece_idx].data
                         )
                         miner_stats[uid]["store_successes"] += 1
                         miner_stats[uid]["total_successes"] += 1
-                        logger.debug(f"Miner {uid} successfully stored {true_hash}")
 
-            to_query = []  # Reset the batch
+            # Reset for the next batch
+            to_query = []
 
+        # Main loop to process each piece
         for idx, piece_info in enumerate(pieces):
             p_hash = piece_hash(piece_info.data)
             piece_hashes.append(p_hash)
@@ -847,13 +1035,13 @@ class Validator(Neuron):
                 )
             )
 
-            # Log details
             logger.debug(
-                f"piece: {idx} | type: {piece_info.piece_type} | hash: {p_hash} | b64 preview: {piece_info.data[:10]}"
+                f"piece: {idx} | type: {piece_info.piece_type} | hash: {p_hash} "
+                f"| b64 preview: {piece_info.data[:10]}"
             )
-
             logger.debug(f"hotkeys to query: {hotkeys}")
 
+            # Create a storage request task for this piece
             task = asyncio.create_task(
                 self.query_multiple_miners(
                     miner_hotkeys=hotkeys,
@@ -869,40 +1057,102 @@ class Validator(Neuron):
                     method="POST",
                 )
             )
-            to_query.append((idx, task))  # Pair index with the task
+            # Store (piece_index, task) in to_query
+            to_query.append((idx, task))
             curr_batch_size += 1
 
-            # Send batch requests if batch size is reached
+            # If batch size is reached, send the batch
             if curr_batch_size >= self.settings.validator.query.batch_size:
                 logger.info(f"Sending {curr_batch_size} batched requests...")
                 await handle_batch_requests()
                 curr_batch_size = 0
+            logger.debug(f"Queued piece {idx} for storage with miner UIDs: {uids}")
 
-        # Handle any remaining queries
+        # Handle any remaining queries in the final batch
         if to_query:
             logger.info(f"Sending remaining {curr_batch_size} batched requests...")
             await handle_batch_requests()
 
         logger.debug(f"Processed {len(piece_hashes)} pieces.")
 
+        # Update store latency data
         alpha: float = self.settings.neuron.response_time_alpha
-        self.store_latencies = (alpha * latencies) + (1 - alpha) * self.store_latencies
+        self.store_latencies = alpha * latencies + (1 - alpha) * self.store_latencies
         self.store_latency_scores = 1 - (
             self.store_latencies / self.store_latencies.max()
         )
 
-        # update miner stats table in db
+        # Update miner stats in the database
         async with db.get_db_connection(self.db_dir) as conn:
             for miner_uid in uids:
                 await db.update_stats(
-                    conn,
-                    miner_uid=miner_uid,
-                    stats=miner_stats[miner_uid],
+                    conn, miner_uid=miner_uid, stats=miner_stats[miner_uid]
                 )
 
-        return piece_hashes, processed_pieces
+        return ProcessedPieceResponse(
+            piece_hashes=piece_hashes, processed_pieces=processed_pieces
+        )
 
     """API Routes"""
+
+    def verify_challenge(self, challenge_request: protocol.ProofResponse) -> bool:
+        """Verify the challenge proof from the miner
+
+        Parameters
+        ----------
+        challenge_request : protocol.ProofResponse
+            The challenge proof from the miner
+
+        Returns
+        -------
+        bool
+            True if the proof is valid, False otherwise
+        """
+
+        logger.debug(f"Verifying challenge proof: {challenge_request.challenge_id}")
+        proof = challenge_request.proof
+        try:
+            proof = Proof.model_validate(proof)
+        except Exception as e:
+            logger.error(f"Invalid proof: {e}")
+            return False
+
+        challenge: protocol.NewChallenge = self.challenges.get(
+            challenge_request.challenge_id
+        )
+        if not challenge:
+            logger.error(f"Challenge {challenge_request.challenge_id} not found")
+            return False
+
+        if challenge.challenge_deadline < datetime.now(UTC).isoformat():
+            logger.error(f"Challenge {challenge_request.challenge_id} has expired")
+            return False
+
+        tag = challenge.challenge.tag
+        tag = APDPTag.model_validate(tag)
+        logger.debug(f"Tag: {tag}")
+
+        logger.debug(
+            f"Proof: {proof} \n Challenge: {challenge.challenge} \n tag: {tag} \n n: {challenge.public_key} \n e: {challenge.public_exponent}"
+        )
+
+        if not self.challenge.verify_proof(
+            proof=proof,
+            challenge=challenge.challenge,
+            tag=tag,
+            n=challenge.public_key,
+            e=challenge.public_exponent,
+        ):
+            logger.error(
+                f"Proof verification failed for challenge {challenge.challenge_id}"
+            )
+            return False
+
+        logger.info(
+            f"Proof verification successful for challenge {challenge.challenge_id}"
+        )
+
+        return True
 
     def status(self) -> str:
         return "Hello from Storb!"
@@ -934,7 +1184,9 @@ class Validator(Neuron):
                     chunk_hashes=metadata.chunk_hashes,
                     creation_timestamp=metadata.creation_timestamp,
                 )
-                if not verify_message(self.metagraph, message, signature, self.uid):
+                if not verify_message(
+                    self.metagraph, message, signature, metadata.validator_id
+                ):
                     raise HTTPException(
                         status_code=HTTP_400_BAD_REQUEST, detail="Invalid signature"
                     )
@@ -1036,9 +1288,12 @@ class Validator(Neuron):
                         )
 
                         encoded_chunk = encode_chunk(chunk_buffer, chunk_idx)
-                        sent_piece_hashes, _ = await self.process_pieces(
+
+                        response = await self.process_pieces(
                             pieces=encoded_chunk.pieces, hotkeys=hotkeys
                         )
+
+                        sent_piece_hashes = response.piece_hashes
 
                         dht_chunk = ChunkDHTValue(
                             validator_id=validator_id,
@@ -1099,7 +1354,7 @@ class Validator(Neuron):
             consumer.cancel()
 
             await asyncio.gather(consumer, return_exceptions=True)
-
+            logger.critical(f"total piece hashes: {len(piece_hashes)}")
             infohash, _ = generate_infohash(
                 filename, timestamp, chunk_size, filesize, list(piece_hashes)
             )

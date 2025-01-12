@@ -4,6 +4,7 @@ from typing import Union
 from pydantic import BaseModel
 from substrateinterface import Keypair
 
+from storb.challenge import Challenge
 from storb.util.logging import get_logger
 from storb.util.piece import PieceType
 
@@ -45,7 +46,7 @@ class PieceMessage(BaseModel):
     piece_type: PieceType
 
 
-MessageType = Union[ChunkMessage, TrackerMessage, PieceMessage]
+MessageType = ChunkMessage | TrackerMessage | PieceMessage | Challenge
 
 
 def sign_message(message: MessageType, hotkey_keypair: Keypair) -> str:
@@ -67,7 +68,7 @@ def sign_message(message: MessageType, hotkey_keypair: Keypair) -> str:
     message = message.model_dump_json()
     logger.debug(f"Signing message: {message}")
     signature = hotkey_keypair.sign(message).hex()
-    logger.debug(f"Signature: {signature}")
+    logger.debug(f"Signature: {signature}, Hotkey: {hotkey_keypair.ss58_address}")
     return signature
 
 
@@ -107,7 +108,7 @@ def verify_message(
 
     signer_hotkey = hotkeys[signer]
     keypair = Keypair(ss58_address=signer_hotkey, ss58_format=42)
-    logger.debug(f"Verifying message: {message}")
+    logger.debug(f"Verifying message: {message} with signature: {signature}")
     result = keypair.verify(message, signature)
-    logger.debug(f"Verification result: {result}")
+    logger.debug(f"Verification result: {result}, Hotkey: {signer_hotkey}")
     return result

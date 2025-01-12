@@ -70,6 +70,7 @@ class PersistentStorageDHT(IStorage):
         self.mem: dict[bytes, tuple[DHTValue, float]] = {}
 
         self.loop = asyncio.new_event_loop()
+        self.semaphore = asyncio.Semaphore(100)
         self.thread = threading.Thread(target=self._start_event_loop, daemon=True)
         self.thread.start()
 
@@ -89,18 +90,23 @@ class PersistentStorageDHT(IStorage):
         value : DHTValue
             The value to store.
         """
-
+        logger.debug(f"Number of pending tasks: {len(asyncio.all_tasks(self.loop))}")
         self.mem[key] = (value, time.time())
         namespace, key = parse_store_key(key)
         # Asynchronously write to the database
         future = asyncio.run_coroutine_threadsafe(
             self._db_write_data(namespace, key, value), self.loop
         )
-        try:
-            future.result()
-        except Exception as e:
-            logger.error(f"Database write error for key {key}: {e}")
-            raise
+        # Optionally log or monitor the future without blocking
+
+        def handle_future(fut):
+            try:
+                fut.result()  # This will raise if there's an error
+            except Exception as e:
+                logger.error(f"Database write error for key {key}: {e}")
+
+        # Add a callback to the future
+        future.add_done_callback(handle_future)
 
     def __getitem__(self, key: bytes) -> bytes:
         """Retrieve a value from the DHT corresponding to the key.
@@ -203,65 +209,68 @@ class PersistentStorageDHT(IStorage):
         ValueError
             If the value format is invalid.
         """
+        async with self.semaphore:
+            try:
+                value = value.decode("utf-8")
+            except ValueError:
+                raise ValueError(
+                    f"DISK: Invalid value format: {value}, expected utf-8 encoded bytes"
+                )
 
-        try:
-            value = value.decode("utf-8")
-        except ValueError:
-            raise ValueError(
-                f"DISK: Invalid value format: {value}, expected utf-8 encoded bytes"
-            )
+            logger.debug(f"DISK: Setting {namespace}:{key} => {value}")
+            async with db.get_db_connection(self.db_path) as conn:
+                await conn.execute("PRAGMA journal_mode=WAL;")
+                match namespace:
+                    case "chunk":
+                        val = ChunkDHTValue.model_validate_json(value)
+                        entry = ChunkDHTValue(
+                            chunk_hash=key,
+                            validator_id=val.validator_id,
+                            piece_hashes=val.piece_hashes,
+                            chunk_idx=val.chunk_idx,
+                            k=val.k,
+                            m=val.m,
+                            chunk_size=val.chunk_size,
+                            padlen=val.padlen,
+                            original_chunk_size=val.original_chunk_size,
+                            signature=val.signature,
+                        )
+                        logger.debug(f"flushing chunk entry {entry} to disk")
+                        await db.set_chunk_entry(conn, entry)
 
-        logger.debug(f"DISK: Setting {namespace}:{key} => {value}")
-        async with db.get_db_connection(self.db_path) as conn:
-            match namespace:
-                case "chunk":
-                    val = ChunkDHTValue.model_validate_json(value)
-                    entry = db.ChunkEntry(
-                        chunk_hash=key,
-                        validator_id=val.validator_id,
-                        piece_hashes=val.piece_hashes,
-                        chunk_idx=val.chunk_idx,
-                        k=val.k,
-                        m=val.m,
-                        chunk_size=val.chunk_size,
-                        padlen=val.padlen,
-                        original_chunk_size=val.original_chunk_size,
-                        signature=val.signature,
-                    )
-                    logger.debug(f"flushing chunk entry {entry} to disk")
-                    await db.set_chunk_entry(conn, entry)
+                    case "piece":
+                        val = PieceDHTValue.model_validate_json(value)
+                        entry = PieceDHTValue(
+                            piece_hash=key,
+                            validator_id=val.validator_id,
+                            miner_id=val.miner_id,
+                            chunk_idx=val.chunk_idx,
+                            piece_idx=val.piece_idx,
+                            piece_type=val.piece_type,
+                            tag=val.tag,
+                            signature=val.signature,
+                        )
+                        logger.debug(f"flushing piece entry {entry} to disk")
+                        await db.set_piece_entry(conn, entry)
 
-                case "piece":
-                    val = PieceDHTValue.model_validate_json(value)
-                    entry = db.PieceEntry(
-                        piece_hash=key,
-                        miner_id=val.miner_id,
-                        chunk_idx=val.chunk_idx,
-                        piece_idx=val.piece_idx,
-                        piece_type=val.piece_type,
-                        signature=val.signature,
-                    )
-                    logger.debug(f"flushing piece entry {entry} to disk")
-                    await db.set_piece_entry(conn, entry)
+                    case "tracker":
+                        val = TrackerDHTValue.model_validate_json(value)
+                        entry = TrackerDHTValue(
+                            infohash=key,
+                            validator_id=val.validator_id,
+                            filename=val.filename,
+                            length=val.length,
+                            chunk_size=val.chunk_size,
+                            chunk_count=val.chunk_count,
+                            chunk_hashes=val.chunk_hashes,
+                            creation_timestamp=val.creation_timestamp,
+                            signature=val.signature,
+                        )
+                        logger.debug(f"flushing tracker entry {entry} to disk")
+                        await db.set_tracker_entry(conn, entry)
 
-                case "tracker":
-                    val = TrackerDHTValue.model_validate_json(value)
-                    entry = db.TrackerEntry(
-                        infohash=key,
-                        validator_id=val.validator_id,
-                        filename=val.filename,
-                        length=val.length,
-                        chunk_size=val.chunk_size,
-                        chunk_count=val.chunk_count,
-                        chunk_hashes=val.chunk_hashes,
-                        creation_timestamp=val.creation_timestamp,
-                        signature=val.signature,
-                    )
-                    logger.debug(f"flushing tracker entry {entry} to disk")
-                    await db.set_tracker_entry(conn, entry)
-
-                case _:
-                    raise ValueError(f"Invalid key namespace: {namespace}")
+                    case _:
+                        raise ValueError(f"Invalid key namespace: {namespace}")
 
     async def _db_read_data(self, key: bytes) -> DHTValue:
         """Read from the DB in the event loop thread, based on the namespace.
@@ -322,10 +331,12 @@ class PersistentStorageDHT(IStorage):
                     return (
                         PieceDHTValue(
                             piece_hash=entry.piece_hash,
+                            validator_id=entry.validator_id,
                             miner_id=entry.miner_id,
                             chunk_idx=entry.chunk_idx,
                             piece_idx=entry.piece_idx,
                             piece_type=entry.piece_type,
+                            tag=entry.tag,
                             signature=entry.signature,
                         )
                         .model_dump_json()

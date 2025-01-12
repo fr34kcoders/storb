@@ -13,7 +13,9 @@ mock = false
 load_old_nodes = true
 min_stake_threshold = 1000
 
+log_level = "info"
 db_dir = "database.db"
+pem_file="storb.pem"
 
 [subtensor]
 network = "finney"
