@@ -2,18 +2,7 @@
 
 Validators play a crucial role in the Storb network by serving as gateways to the storage subnet. They handle the storage and retrieval of files, ensuring data integrity and availability.
 
-## Types of Validators
-
-- **Organic Validator:** Directly participates in the network by storing and retrieving files.
-- **Synthetic (Challenge) Validator:** *(Coming Soon)* Designed for specific challenge scenarios where they verify that piece are stored by the designated miners. [Learn more](https://github.com/fr34kcoders/storb/pull/20)
-
----
-
-## Organic Validator
-
-Organic validators are the backbone of the Storb storage subnet, responsible for managing file storage and retrieval operations.
-
-### Testnet Setup
+### Setup
 
 1. **Activate Your Virtual Environment**
 
@@ -43,7 +32,7 @@ Organic validators are the backbone of the Storb storage subnet, responsible for
     SUBTENSOR_ADDRESS=<subtensor_address> \
     MIN_STAKE_THRESHOLD=-1 \
     python storb/validator \
-    --netuid 1 \
+    --netuid 269 \ # 269 on testnet
     --subtensor.network <subtensor_network> \
     --subtensor.address <subtensor_address> \
     --wallet_name validator \

@@ -36,6 +36,7 @@ class NewChallenge(BaseModel):
     challenge_id: str
     piece_id: str
     validator_id: int
+    miner_id: int
     challenge_deadline: str
     public_key: int
     public_exponent: int
