@@ -42,7 +42,7 @@ The `Challenge` class encapsulates the parameters sent by the validator to the m
   - `prp_key`: A byte string serving as a key for the Pseudo-Random Permutation (PRP).
   - `prf_key`: A byte string serving as a key for the PRF.
   - `s`: An integer randomly selected to introduce variability in the challenge.
-  - `g_s`: An integer calculated as $ g^s \mod n $, where `g` is the generator and `n` is the RSA modulus.
+  - `g_s`: An integer calculated as $g^s \mod n$, where `g` is the generator and `n` is the RSA modulus.
 
 - **Serialization:**
   - `prp_key` and `prf_key` are serialized and deserialized using Base64 encoding.
@@ -113,7 +113,7 @@ challenge = self.issue_challenge(tag)
 
 - **Process:**
   - Selects a random integer `s` ensuring $\gcd(s, n) = 1$.
-  - Calculates $ g_s = g^s \mod n $.
+  - Calculates $g_s = g^s \mod n$.
   - Generates ephemeral keys (`prp_key`, `prf_key`) for the challenge.
   - Constructs a `Challenge` object encapsulating the tag and challenge parameters.
 
@@ -129,7 +129,7 @@ proof = self.generate_proof(data, tag, challenge, n)
   - Derives a coefficient using the PRF with `prf_key`.
   - Adjusts the tag value by raising it to the derived coefficient modulo `n`.
   - Aggregates the data block value by multiplying it with the coefficient.
-  - Computes $\rho = g_s^\text{aggregated\_blocks} \mod n $ and hashes the result to produce `hashed_result`.
+  - Computes rho and hashes the result to produce `hashed_result`.
   - Constructs a `Proof` object containing the modified tag value, aggregated block value, and hashed result.
 
 ### Step 5: **Verifying a Proof**
@@ -141,10 +141,10 @@ is_valid = self.verify_proof(proof, challenge, tag, n, e)
 ```
 
 - **Process:**
-  - Recomputes $\tau = (proof * tag\_value^e) \mod n$.
+  - Recomputes $tau = (proof * tag\_value^e) \mod n$.
   - Eliminates the effect of the full domain hash by applying the modular inverse of the FDH component.
-  - Calculates $\tau_s = \tau^s \mod n $ based on the challenge parameter `s`.
-  - Hashes $\tau_s $ and compares it with the `hashed_result` from the proof.
+  - Calculates $tau_s = \tau^s \mod n$ based on the challenge parameter `s`.
+  - Hashes $tau_s$ and compares it with the `hashed_result` from the proof.
   - Returns `True` if the hashes match, indicating valid proof; otherwise, returns `False`.
 
 ---
