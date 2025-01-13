@@ -2,7 +2,7 @@
 
 ## Overview
 
-The **Challenge System** in Storb is designed to implement a **Provable Data Possession (PDP)** protocol. This system enables a **validator** to verify that a **miner** is correctly storing specific data blocks without requiring access to the entire data. The system leverages cryptographic techniques to ensure data integrity and storage reliability in a secure and efficient manner.
+The **Challenge System** in Storb is designed to implement a [**Provable Data Possession (PDP)** protocol](https://dl.acm.org/doi/10.1145/1315245.1315318). This system enables a **validator** to verify that a **miner** is correctly storing specific data blocks without requiring access to the entire data. The system leverages cryptographic techniques to ensure data integrity and storage reliability in a secure and efficient manner.
 
 ---
 
@@ -87,8 +87,8 @@ self.key.generate(rsa_bits=DEFAULT_RSA_KEY_SIZE)
 
 - **Process:**
   - Generates an RSA private key with the specified key size.
-  - Selects a suitable generator `g` within $\mathbb{Z}_n$.
-  - Generates a PRF key (`prf_key`) for random value generation.
+  - Selects a suitable generator `g` in $\mathbb{Z}_n$.
+  - Generates a PRF key (`prf_key`) for pseudorandom number generation.
 
 ### Step 2: **Tag Generation**
 
@@ -141,8 +141,8 @@ is_valid = self.verify_proof(proof, challenge, tag, n, e)
 ```
 
 - **Process:**
-  - Recomputes $tau = (proof * tag\_value^e) \mod n$.
-  - Eliminates the effect of the full domain hash by applying the modular inverse of the FDH component.
+  - Recomputes `tau = (proof * tag_value^e) mod n`.
+  - Eliminates the effect of the full domain hash (FDH) by applying the modular inverse of the FDH component.
   - Calculates $tau_s = \tau^s \mod n$ based on the challenge parameter `s`.
   - Hashes $tau_s$ and compares it with the `hashed_result` from the proof.
   - Returns `True` if the hashes match, indicating valid proof; otherwise, returns `False`.
