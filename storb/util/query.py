@@ -63,12 +63,6 @@ def factory_app(conf: StorbConfig, debug: bool = False) -> FastAPI:
     async def lifespan(app: FastAPI):
         config = custom_config(conf)
         metagraph = config.metagraph
-        # sync_thread = None
-        # if metagraph.substrate is not None:
-        #     sync_thread = threading.Thread(
-        #         target=metagraph.periodically_sync_nodes, daemon=True
-        #     )
-        #     sync_thread.start()
 
         yield
 
@@ -76,8 +70,6 @@ def factory_app(conf: StorbConfig, debug: bool = False) -> FastAPI:
 
         # TODO: should this be moved elsewhere?
         metagraph.shutdown()
-        # if metagraph.substrate is not None and sync_thread is not None:
-        #     sync_thread.join()
 
     app = FastAPI(lifespan=lifespan, debug=debug)
 
@@ -178,6 +170,33 @@ async def make_non_streamed_post(
     payload: Payload,
     timeout: float = QUERY_TIMEOUT,
 ) -> httpx.Response:
+    """Make a non-streamed POST request. Adapted from Fiber's implementation
+
+    Parameters
+    ----------
+    httpx_client : httpx.AsyncClient
+        The HTTPX client to use for the request
+    server_address : str
+        The address of the server to send the request to
+    validator_ss58_address : str
+        The SS58 address of the validator
+    miner_ss58_address : str
+        The SS58 address of the miner
+    keypair : Keypair
+        The keypair to use for signing the request
+    endpoint : str
+        The endpoint to send the request to
+    payload : Payload
+        The payload to send with the request
+    timeout : float, optional
+        The timeout for the request, by default QUERY_TIMEOUT
+
+    Returns
+    -------
+    httpx.Response
+        The response from the server
+    """
+
     # Prepare the headers with a nonce
     content = bytes(str(payload.data or "").encode("utf-8")) + (
         bytes(str(payload.file or "").encode("utf-8")) if payload.file else b""
@@ -227,11 +246,35 @@ async def make_streamed_post(
     miner_ss58_address: str,
     keypair: Keypair,
     endpoint: str,
-    # payload: dict[str, Any],
     payload: Payload,
     timeout: float = QUERY_TIMEOUT,
 ) -> AsyncGenerator[bytes, None]:
-    """Make a streamed POST request. Adapted from Fiber's implementation"""
+    """Make a streamed POST request. Adapted from Fiber's implementation
+
+    Parameters
+    ----------
+    httpx_client : httpx.AsyncClient
+        The HTTPX client to use for the request
+    server_address : str
+        The address of the server to send the request to
+    validator_ss58_address : str
+        The SS58 address of the validator
+    miner_ss58_address : str
+        The SS58 address of the miner
+    keypair : Keypair
+        The keypair to use for signing the request
+    endpoint : str
+        The endpoint to send the request to
+    payload : Payload
+        The payload to send with the request
+    timeout : float, optional
+        The timeout for the request, by default QUERY_TIMEOUT
+
+    Yields
+    -------
+    AsyncGenerator[bytes, None]
+        An async generator that yields the response content line by line
+    """
 
     content = (
         bytes(str(payload.data or "").encode("utf-8"))
@@ -288,6 +331,31 @@ async def make_non_streamed_get(
     payload: Payload,
     timeout: float = QUERY_TIMEOUT,
 ) -> httpx.Response:
+    """Make a non-streamed GET request.
+
+    Parameters
+    ----------
+    httpx_client (httpx.AsyncClient)
+        httpx.AsyncClient instance
+    server_address (str)
+        Server address to send the request to
+    validator_ss58_address (str)
+        SS58 address of the validator making the request
+    symmetric_key_uuid (str)
+        UUID of the symmetric key
+    endpoint (str)
+        Endpoint to send the request to
+    payload (Payload)
+        Payload to send with the request
+    timeout (float, optional)
+        Timeout for the request, by default QUERY_TIMEOUT
+
+    Returns
+    -------
+    httpx.Response
+        Response from the server
+    """
+
     headers = _get_headers(symmetric_key_uuid, validator_ss58_address)
     response = await httpx_client.get(
         json=payload.data.model_dump(),

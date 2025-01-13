@@ -48,9 +48,9 @@ class KeyManager:
         """
 
         while True:
-            response = input(f"{message} (yes/no): ").strip().lower()
-            if response in ["yes", "no"]:
-                return response == "yes"
+            response = input(f"{message} (y/n): ").strip().lower()
+            if response in ["yes", "no", "y", "n"]:
+                return response == "yes" or response == "y"
             logger.warning("Please respond with 'yes' or 'no'.")
 
     def initialize_keys(self, rsa_bits=DEFAULT_RSA_KEY_SIZE):

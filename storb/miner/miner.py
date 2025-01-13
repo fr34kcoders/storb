@@ -1,6 +1,5 @@
 import asyncio
 import datetime
-import sys
 import threading
 import uuid
 
@@ -35,6 +34,7 @@ class Miner(Neuron):
         ] = asyncio.PriorityQueue()
 
     async def start(self):
+        """Starts the miner's operations."""
         self.app_init()
         await self.start_dht()
 
@@ -152,7 +152,13 @@ class Miner(Neuron):
         return response
 
     async def get_piece(self, request: protocol.Retrieve):
-        """Returns a piece from storage as JSON metadata and a file."""
+        """Returns a piece from storage as JSON metadata and a file.
+
+        Parameters
+        ----------
+        request : protocol.Retrieve
+            The request object containing the piece_id to retrieve.
+        """
 
         logger.info("Retrieving piece...")
         logger.debug(f"piece_id to retrieve: {request.piece_id}")

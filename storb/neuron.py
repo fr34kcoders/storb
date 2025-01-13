@@ -4,7 +4,6 @@ import time
 from abc import ABC, abstractmethod
 
 import httpx
-import uvicorn
 from fastapi import FastAPI
 from fiber.chain import chain_utils, interface, post_ip_to_chain
 from fiber.chain.metagraph import Metagraph
