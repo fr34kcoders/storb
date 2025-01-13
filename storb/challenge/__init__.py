@@ -97,16 +97,6 @@ class CryptoUtils:
         block = int_to_bytes(input_int, out_len)
         return hmac.digest(key, block, hashlib.sha256)
 
-    @staticmethod
-    def mod_power(a, n, m):
-        r = 1
-        while n > 0:
-            if n & 1 == 1:
-                r = (r * a) % m
-            a = (a * a) % m
-            n >>= 1
-        return r
-
 
 class APDPKey(BaseModel):
     """Holds the cryptographic parameters for single-block APDP. Using Pydantic to store/serialize them.
@@ -154,7 +144,7 @@ class APDPKey(BaseModel):
         g_candidate = None
         for _ in range(G_CANDIDATE_RETRY):
             candidate = random.randint(2, n - 2)
-            temp_val = pow(candidate, 2, n)
+            temp_val = gmpy2.powmod(gmpy2.mpz(candidate), 2, n)
             if temp_val not in (0, 1):
                 g_candidate = temp_val
                 break
@@ -245,7 +235,7 @@ def generate_tag(data: bytes, keys: bytes, prf_key: bytes, g: int) -> APDPTag:
     d = key.private_numbers().d
 
     try:
-        tag_value = pow(gmpy2.mpz(base), gmpy2.mpz(d), gmpy2.mpz(n))
+        tag_value = gmpy2.powmod(gmpy2.mpz(base), gmpy2.mpz(d), gmpy2.mpz(n))
     except ValueError:
         raise APDPError("Failed to compute tag value.")
 
@@ -429,7 +419,7 @@ class ChallengeSystem:
                 "Key values are not initialized. Call initialize_keys first."
             )
 
-        n = self.key.rsa.public_key().public_numbers().n
+        n = gmpy2.mpz(self.key.rsa.public_key().public_numbers().n)
         s = random.randint(2, n - 1)
 
         attempt_count = 0
@@ -439,12 +429,13 @@ class ChallengeSystem:
             if attempt_count > S_CANDIDATE_RETRY:
                 raise APDPError("Failed to find suitable s in Z*_n")
 
-        g_s = pow(self.key.g, s, n)
+        g_s = gmpy2.powmod(gmpy2.mpz(self.key.g), s, n)
         prp_key = Fernet.generate_key()
         prf_key = Fernet.generate_key()
 
         tag = APDPTag.model_validate_json(tag)
 
+        g_s = int(g_s)
         return Challenge(s=s, g_s=g_s, prf_key=prf_key, prp_key=prp_key, tag=tag)
 
     def generate_proof(
@@ -484,14 +475,20 @@ class ChallengeSystem:
             f"Block int: {block_int}, coefficient: {coefficient}, prf: {prf_result}"
         )
 
-        aggregated_tag = pow(tag.tag_value, coefficient, n)
+        n = gmpy2.mpz(n)
+        coefficient = gmpy2.mpz(coefficient)
+
+        aggregated_tag = gmpy2.powmod(gmpy2.mpz(tag.tag_value), coefficient, n)
+        aggregated_tag = int(aggregated_tag)
         aggregated_blocks = coefficient * block_int
+        aggregated_blocks = gmpy2.mpz(aggregated_blocks)
+        aggregated_blocks = int(aggregated_blocks)
 
         logger.debug(
             f"Aggregated tag: {aggregated_tag}, aggregated blocks: {aggregated_blocks}"
         )
 
-        rho = pow(challenge.g_s, aggregated_blocks, n)
+        rho = gmpy2.powmod(gmpy2.mpz(challenge.g_s), aggregated_blocks, n)
         hashed_result = hashlib.sha256(int_to_bytes(rho)).digest()
 
         logger.debug(f"Hashed result: {hashed_result}")
@@ -534,23 +531,27 @@ class ChallengeSystem:
 
         rsa_key = self.key.rsa
 
+        e = gmpy2.mpz(e)
+        n = gmpy2.mpz(n)
+
         try:
-            tau = pow(proof.tag_value, e, n)
+            tau = gmpy2.powmod(gmpy2.mpz(proof.tag_value), e, n)
         except ValueError:
             raise APDPError("Failed to compute tau in verification.")
 
         logger.debug(f"Computed tau: {tau}")
         prf_result = CryptoUtils.prf(challenge.prf_key, 0)
         coefficient = int.from_bytes(prf_result, "big") % n
+        coefficient = gmpy2.mpz(coefficient)
         fdh_hash = CryptoUtils.full_domain_hash(rsa_key, tag.prf_value)
-        denominator = pow(fdh_hash, coefficient, n) % n
+        denominator = gmpy2.powmod(gmpy2.mpz(fdh_hash), coefficient, n) % n
         try:
-            denominator_inv = pow(denominator, -1, n)
+            denominator_inv = gmpy2.powmod(gmpy2.mpz(denominator), -1, n)
         except ValueError:
             raise APDPError("Failed to invert denominator modulo n.")
 
         tau = (tau * denominator_inv) % n
-        tau_s = pow(tau, challenge.s, n)
+        tau_s = gmpy2.powmod(tau, challenge.s, n)
 
         expected_hash = hashlib.sha256(int_to_bytes(tau_s)).digest()
         expected_hash = base64.b64encode(expected_hash).decode("utf-8")
