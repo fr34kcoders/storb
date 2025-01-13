@@ -4,7 +4,6 @@ import pickle
 import threading
 from pathlib import Path
 
-from fiber.logging_utils import get_logger
 from kademlia.network import Server
 
 from storb.constants import (
@@ -341,6 +340,7 @@ class DHT:
         RuntimeError
             If the chunk entry fails to retrieve.
         """
+
         logger.info(f"Retrieving chunk entry for chunk hash: {chunk_hash}")
         key = build_store_key("chunk", chunk_hash)
         try:
@@ -378,6 +378,7 @@ class DHT:
         -----
         The key for the piece entry is "piece:piece_hash".
         """
+
         logger.info(f"Storing piece entry for piece_hash: {piece_hash}")
         value: bytes = value.model_dump_json().encode("utf-8")
         key: bytes = build_store_key("piece", piece_hash)
@@ -414,6 +415,7 @@ class DHT:
         RuntimeError
             If the piece entry fails to retrieve.
         """
+
         logger.info(f"Retrieving piece entry for piece hash: {piece_hash}")
         key = build_store_key("piece", piece_hash)
         try:
