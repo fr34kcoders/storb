@@ -2,8 +2,6 @@
 
 Validators play a crucial role in the Storb network by serving as gateways to the storage subnet. They handle the storage and retrieval of files, ensuring data integrity and availability.
 
----
-
 ### Setup
 
 1. **Activate Your Virtual Environment**

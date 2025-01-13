@@ -54,8 +54,8 @@ def get_challenge_scores(
 
     Returns
     -------
-    np.ndarray
-        An array of rewards for the given query and responses.
+    tuple[np.ndarray, np.ndarray]
+        A tuple of arrays, corresponding to the given query and responses.
     """
 
     uids = []

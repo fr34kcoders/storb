@@ -26,7 +26,7 @@ Follow these steps to run a miner on the Storb Testnet:
    SUBTENSOR_ADDRESS=<subtensor_address> \
    MIN_STAKE_THRESHOLD=-1 \
    python storb/miner \
-     --netuid 1 \
+     --netuid 269 \ # 269 on testnet
      --subtensor.network <subtensor_network> \
      --subtensor.address <subtensor_address> \
      --wallet_name miner \
