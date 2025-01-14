@@ -190,7 +190,7 @@ class APDPTag(BaseModel):
         return base64.b64encode(prf_value).decode("utf-8")
 
     @field_validator("prf_value", mode="before")
-    def deserialize_prf_value(cls, value):
+    def deserialize_prf_value(self, value):
         """Deserialize PRF value from base64."""
 
         if isinstance(value, str):
@@ -292,7 +292,7 @@ class Challenge(BaseModel):
         return prf_key
 
     @field_validator("prf_key", mode="before")
-    def deserialize_prf_key(cls, value):
+    def deserialize_prf_key(self, value):
         """Deserialize PRF key from base64."""
 
         if isinstance(value, str):
@@ -304,7 +304,7 @@ class Challenge(BaseModel):
         return value
 
     @field_validator("prp_key", mode="before")
-    def deserialize_prp_key(cls, value):
+    def deserialize_prp_key(self, value):
         """Deserialize PRP key from base64."""
 
         if isinstance(value, str):
