@@ -145,6 +145,7 @@ class APDPKey(BaseModel):
         for _ in range(G_CANDIDATE_RETRY):
             candidate = random.randint(2, n - 2)
             temp_val = gmpy2.powmod(gmpy2.mpz(candidate), 2, n)
+            temp_val = int(temp_val)
             if temp_val not in (0, 1):
                 g_candidate = temp_val
                 break
@@ -173,7 +174,7 @@ class APDPTag(BaseModel):
     prf_value: bytes
 
     @field_serializer("prf_value")
-    def serialize_prf_value(self, prf_value: bytes) -> str:
+    def serialize_prf_value(cls, prf_value: bytes) -> str:
         """Serialize PRF value to base64.
 
         Parameters
@@ -190,7 +191,7 @@ class APDPTag(BaseModel):
         return base64.b64encode(prf_value).decode("utf-8")
 
     @field_validator("prf_value", mode="before")
-    def deserialize_prf_value(self, value):
+    def deserialize_prf_value(cls, value):
         """Deserialize PRF value from base64."""
 
         if isinstance(value, str):
@@ -252,7 +253,7 @@ class Challenge(BaseModel):
     g_s: int
 
     @field_serializer("prp_key")
-    def serialize_prp_key(self, prp_key: bytes) -> str:
+    def serialize_prp_key(cls, prp_key: bytes) -> str:
         """Serialize PRP key to base64.
 
         Parameters
@@ -272,7 +273,7 @@ class Challenge(BaseModel):
         return prp_key
 
     @field_serializer("prf_key")
-    def serialize_prf_key(self, prf_key: bytes) -> str:
+    def serialize_prf_key(cls, prf_key: bytes) -> str:
         """Serialize PRF key to base64.
 
         Parameters
@@ -292,7 +293,7 @@ class Challenge(BaseModel):
         return prf_key
 
     @field_validator("prf_key", mode="before")
-    def deserialize_prf_key(self, value):
+    def deserialize_prf_key(cls, value):
         """Deserialize PRF key from base64."""
 
         if isinstance(value, str):
@@ -304,7 +305,7 @@ class Challenge(BaseModel):
         return value
 
     @field_validator("prp_key", mode="before")
-    def deserialize_prp_key(self, value):
+    def deserialize_prp_key(cls, value):
         """Deserialize PRP key from base64."""
 
         if isinstance(value, str):
