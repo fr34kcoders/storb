@@ -1,5 +1,4 @@
 from binascii import unhexlify
-from typing import Union
 
 from pydantic import BaseModel
 from substrateinterface import Keypair

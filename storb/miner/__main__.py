@@ -1,9 +1,8 @@
 import asyncio
 import time
 
-from storb.util.logging import get_logger
-
 from storb.miner import Miner
+from storb.util.logging import get_logger
 
 logger = get_logger(__name__)
 

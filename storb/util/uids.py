@@ -1,6 +1,5 @@
 import random
 
-import numpy as np
 from fiber.chain.metagraph import Metagraph
 
 from storb.neuron import Neuron
