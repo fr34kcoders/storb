@@ -180,7 +180,8 @@ class APDPTag(BaseModel):
     prf_value: bytes
 
     @field_serializer("prf_value")
-    def serialize_prf_value(self, prf_value: bytes) -> str:
+    @classmethod
+    def serialize_prf_value(cls, prf_value: bytes) -> str:
         """Serialize PRF value to base64.
 
         Parameters
@@ -197,6 +198,7 @@ class APDPTag(BaseModel):
         return base64.b64encode(prf_value).decode("utf-8")
 
     @field_validator("prf_value", mode="before")
+    @classmethod
     def deserialize_prf_value(cls, value):
         """Deserialize PRF value from base64."""
 
@@ -244,6 +246,7 @@ class Challenge(BaseModel):
         return prf_key
 
     @field_validator("prf_key", mode="before")
+    @classmethod
     def deserialize_prf_key(cls, value):
         """Deserialize PRF key from base64 before assignment."""
 
@@ -255,6 +258,7 @@ class Challenge(BaseModel):
         return value
 
     @field_validator("prp_key", mode="before")
+    @classmethod
     def deserialize_prp_key(cls, value):
         """Deserialize PRP key from base64 before assignment."""
 
