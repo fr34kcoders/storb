@@ -6,11 +6,15 @@ from typing import Optional
 
 import gmpy2
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.utils import int_to_bytes
-from pydantic import BaseModel, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    FieldSerializationInfo,
+    field_serializer,
+    field_validator,
+)
 
 from storb.constants import DEFAULT_RSA_KEY_SIZE, G_CANDIDATE_RETRY, S_CANDIDATE_RETRY
 from storb.util.logging import get_logger
@@ -75,7 +79,7 @@ class CryptoUtils:
 
     @staticmethod
     def prf(key: bytes, input_int: int, out_len=16) -> bytes:
-        """Psuedo-random function using HMAC-SHA256
+        """Pseudo-random function using HMAC-SHA256.
 
         Parameters
         ----------
@@ -100,6 +104,7 @@ class CryptoUtils:
 
 class APDPKey(BaseModel):
     """Holds the cryptographic parameters for single-block APDP. Using Pydantic to store/serialize them.
+
     Attributes
     ----------
     rsa: Optional[RSAPrivateKey]
@@ -146,6 +151,7 @@ class APDPKey(BaseModel):
             candidate = random.randint(2, n - 2)
             temp_val = gmpy2.powmod(gmpy2.mpz(candidate), 2, n)
             temp_val = int(temp_val)
+            # Basic check that g^2 mod n not in {0,1}
             if temp_val not in (0, 1):
                 g_candidate = temp_val
                 break
@@ -174,7 +180,7 @@ class APDPTag(BaseModel):
     prf_value: bytes
 
     @field_serializer("prf_value")
-    def serialize_prf_value(cls, prf_value: bytes) -> str:
+    def serialize_prf_value(self, prf_value: bytes) -> str:
         """Serialize PRF value to base64.
 
         Parameters
@@ -196,51 +202,10 @@ class APDPTag(BaseModel):
 
         if isinstance(value, str):
             try:
-                decoded_value = base64.b64decode(value)
-                return decoded_value
+                return base64.b64decode(value)
             except Exception:
                 raise ValueError("Invalid base64 for prf_value")
         return value
-
-
-def generate_tag(data: bytes, keys: bytes, prf_key: bytes, g: int) -> APDPTag:
-    """Generate a tag for a given data block.
-
-    Parameters
-    ----------
-    data: bytes
-        Data block to generate tag for
-
-    Returns
-    -------
-    APDPTag
-        Generated tag
-    """
-    key = serialization.load_pem_private_key(keys, password=None)
-
-    if not data:
-        raise APDPError("No data to generate tag.")
-
-    # RSA parameters
-    n = key.public_key().public_numbers().n
-
-    # Convert entire data to integer mod n (RSA Public Modulus)
-    block_int = int.from_bytes(data, "big") % n
-
-    prf_value = CryptoUtils.prf(prf_key, 0)
-    fdh_hash = CryptoUtils.full_domain_hash(key, prf_value)
-
-    logger.debug(f"FDH hash: {fdh_hash}, PRF value: {prf_value}")
-
-    base = (fdh_hash * (g, gmpy2.mpz(block_int), n)) % n
-    d = key.private_numbers().d
-
-    try:
-        tag_value = gmpy2.powmod(gmpy2.mpz(base), gmpy2.mpz(d), gmpy2.mpz(n))
-    except ValueError:
-        raise APDPError("Failed to compute tag value.")
-
-    return APDPTag(index=0, tag_value=tag_value, prf_value=prf_value)
 
 
 class Challenge(BaseModel):
@@ -253,7 +218,7 @@ class Challenge(BaseModel):
     g_s: int
 
     @field_serializer("prp_key")
-    def serialize_prp_key(cls, prp_key: bytes) -> str:
+    def serialize_prp_key(self, prp_key: bytes) -> str:
         """Serialize PRP key to base64.
 
         Parameters
@@ -268,50 +233,34 @@ class Challenge(BaseModel):
         """
 
         if isinstance(prp_key, bytes):
-            new_key = base64.b64encode(prp_key).decode("utf-8")
-            return new_key
+            return base64.b64encode(prp_key).decode("utf-8")
         return prp_key
 
     @field_serializer("prf_key")
-    def serialize_prf_key(cls, prf_key: bytes) -> str:
-        """Serialize PRF key to base64.
-
-        Parameters
-        ----------
-        prf_key: bytes
-            PRF key to serialize
-
-        Returns
-        -------
-        str
-            Base64-encoded PRF key
-        """
-
+    def serialize_prf_key(self, prf_key: bytes, info: FieldSerializationInfo) -> str:
+        """Serialize PRF key to base64."""
         if isinstance(prf_key, bytes):
-            new_key = base64.b64encode(prf_key).decode("utf-8")
-            return new_key
+            return base64.b64encode(prf_key).decode("utf-8")
         return prf_key
 
     @field_validator("prf_key", mode="before")
     def deserialize_prf_key(cls, value):
-        """Deserialize PRF key from base64."""
+        """Deserialize PRF key from base64 before assignment."""
 
         if isinstance(value, str):
             try:
-                decoded_value = base64.b64decode(value)
-                return decoded_value
+                return base64.b64decode(value)
             except Exception:
                 raise ValueError("Invalid base64 for prf_key")
         return value
 
     @field_validator("prp_key", mode="before")
     def deserialize_prp_key(cls, value):
-        """Deserialize PRP key from base64."""
+        """Deserialize PRP key from base64 before assignment."""
 
         if isinstance(value, str):
             try:
-                decoded_value = base64.b64decode(value)
-                return decoded_value
+                return base64.b64decode(value)
             except Exception:
                 raise ValueError("Invalid base64 for prp_key")
         return value
@@ -332,7 +281,6 @@ class ChallengeSystem:
         """Initialize the APDP challenge system."""
 
         self.key = APDPKey()
-
         logger.debug("Initialized APDP system.")
 
     def initialize_keys(self, rsa_bits=DEFAULT_RSA_KEY_SIZE):
@@ -379,9 +327,7 @@ class ChallengeSystem:
         )  # Convert data to gmpy2.mpz mod n
 
         prf_value = CryptoUtils.prf(self.key.prf_key, 0)
-        fdh_hash = gmpy2.mpz(
-            CryptoUtils.full_domain_hash(self.key.rsa, prf_value)
-        )  # Ensure gmpy2 type
+        fdh_hash = gmpy2.mpz(CryptoUtils.full_domain_hash(self.key.rsa, prf_value))
 
         logger.debug(f"FDH hash: {fdh_hash}, PRF value: {prf_value}")
 
@@ -390,9 +336,7 @@ class ChallengeSystem:
             fdh_hash * gmpy2.powmod(g, block_int, n)
         ) % n  # Use gmpy2.powmod for modular exponentiation
 
-        d = gmpy2.mpz(
-            self.key.rsa.private_numbers().d
-        )  # Ensure private exponent is gmpy2.mpz
+        d = gmpy2.mpz(self.key.rsa.private_numbers().d)
 
         try:
             tag_value = gmpy2.powmod(base, d, n)  # Modular exponentiation for tag value
@@ -420,6 +364,13 @@ class ChallengeSystem:
                 "Key values are not initialized. Call initialize_keys first."
             )
 
+        if isinstance(tag, str):
+            try:
+                tag = APDPTag.model_validate_json(tag)
+            except Exception as e:
+                logger.error(f"Failed to parse tag JSON: {e}")
+                raise APDPError("Failed to parse tag JSON.")
+
         n = gmpy2.mpz(self.key.rsa.public_key().public_numbers().n)
         s = random.randint(2, n - 1)
 
@@ -434,10 +385,14 @@ class ChallengeSystem:
         prp_key = Fernet.generate_key()
         prf_key = Fernet.generate_key()
 
-        tag = APDPTag.model_validate_json(tag)
+        try:
+            tag_obj = APDPTag.model_validate_json(tag.model_dump_json())
+        except Exception as e:
+            logger.error(f"Failed to validate tag: {e}")
+            raise APDPError("Failed to validate tag.")
 
         g_s = int(g_s)
-        return Challenge(s=s, g_s=g_s, prf_key=prf_key, prp_key=prp_key, tag=tag)
+        return Challenge(s=s, g_s=g_s, prf_key=prf_key, prp_key=prp_key, tag=tag_obj)
 
     def generate_proof(
         self, data: bytes, tag: APDPTag, challenge: Challenge, n: int
@@ -463,6 +418,8 @@ class ChallengeSystem:
 
         if not tag or not challenge:
             raise APDPError("Invalid tag or challenge for proof generation.")
+        if self.key.rsa is None:
+            raise APDPError("Keys not initialized.")
 
         logger.debug(f"Generating proof for data: {data[:10]}...")
 
@@ -476,20 +433,20 @@ class ChallengeSystem:
             f"Block int: {block_int}, coefficient: {coefficient}, prf: {prf_result}"
         )
 
-        n = gmpy2.mpz(n)
-        coefficient = gmpy2.mpz(coefficient)
+        n_mpz = gmpy2.mpz(n)
+        coefficient_mpz = gmpy2.mpz(coefficient)
 
-        aggregated_tag = gmpy2.powmod(gmpy2.mpz(tag.tag_value), coefficient, n)
+        aggregated_tag = gmpy2.powmod(gmpy2.mpz(tag.tag_value), coefficient_mpz, n_mpz)
         aggregated_tag = int(aggregated_tag)
-        aggregated_blocks = coefficient * block_int
-        aggregated_blocks = gmpy2.mpz(aggregated_blocks)
-        aggregated_blocks = int(aggregated_blocks)
+
+        aggregated_blocks = coefficient_mpz * block_int
+        aggregated_blocks = int(aggregated_blocks)  # reduce to Python int
 
         logger.debug(
             f"Aggregated tag: {aggregated_tag}, aggregated blocks: {aggregated_blocks}"
         )
 
-        rho = gmpy2.powmod(gmpy2.mpz(challenge.g_s), aggregated_blocks, n)
+        rho = gmpy2.powmod(gmpy2.mpz(challenge.g_s), aggregated_blocks, n_mpz)
         hashed_result = hashlib.sha256(int_to_bytes(rho)).digest()
 
         logger.debug(f"Hashed result: {hashed_result}")
@@ -532,32 +489,36 @@ class ChallengeSystem:
 
         rsa_key = self.key.rsa
 
-        e = gmpy2.mpz(e)
-        n = gmpy2.mpz(n)
+        e_mpz = gmpy2.mpz(e)
+        n_mpz = gmpy2.mpz(n)
 
         try:
-            tau = gmpy2.powmod(gmpy2.mpz(proof.tag_value), e, n)
+            tau = gmpy2.powmod(gmpy2.mpz(proof.tag_value), e_mpz, n_mpz)
         except ValueError:
             raise APDPError("Failed to compute tau in verification.")
 
         logger.debug(f"Computed tau: {tau}")
+
         prf_result = CryptoUtils.prf(challenge.prf_key, 0)
         coefficient = int.from_bytes(prf_result, "big") % n
-        coefficient = gmpy2.mpz(coefficient)
+        coefficient_mpz = gmpy2.mpz(coefficient)
+
         fdh_hash = CryptoUtils.full_domain_hash(rsa_key, tag.prf_value)
-        denominator = gmpy2.powmod(gmpy2.mpz(fdh_hash), coefficient, n) % n
+        denominator = gmpy2.powmod(gmpy2.mpz(fdh_hash), coefficient_mpz, n_mpz) % n_mpz
+
         try:
-            denominator_inv = gmpy2.powmod(gmpy2.mpz(denominator), -1, n)
+            denominator_inv = gmpy2.powmod(denominator, -1, n_mpz)
         except ValueError:
             raise APDPError("Failed to invert denominator modulo n.")
 
-        tau = (tau * denominator_inv) % n
-        tau_s = gmpy2.powmod(tau, challenge.s, n)
+        tau = (tau * denominator_inv) % n_mpz
+        s_mpz = gmpy2.mpz(challenge.s)
+        tau_s = gmpy2.powmod(tau, s_mpz, n_mpz)
 
         expected_hash = hashlib.sha256(int_to_bytes(tau_s)).digest()
-        expected_hash = base64.b64encode(expected_hash).decode("utf-8")
-        # convert expected hash to base64
+        expected_hash_b64 = base64.b64encode(expected_hash).decode("utf-8")
+
         logger.debug(
-            f"Expected hash: {expected_hash} vs. Proof hash: {proof.hashed_result}"
+            f"Expected hash: {expected_hash_b64} vs. Proof hash: {proof.hashed_result}"
         )
-        return expected_hash == proof.hashed_result
+        return expected_hash_b64 == proof.hashed_result
