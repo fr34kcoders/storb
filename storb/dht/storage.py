@@ -253,10 +253,11 @@ class PersistentStorageDHT(IStorage):
 
                 case "piece":
                     val = PieceDHTValue.model_validate_json(value)
+                    miner_ids = ",".join(str(i) for i in val.miner_id)
                     entry = PieceDHTValue(
                         piece_hash=key,
                         validator_id=val.validator_id,
-                        miner_id=val.miner_id,
+                        miner_id=miner_ids,
                         chunk_idx=val.chunk_idx,
                         piece_idx=val.piece_idx,
                         piece_type=val.piece_type,
@@ -341,11 +342,12 @@ class PersistentStorageDHT(IStorage):
                     entry = await db.get_piece_entry(conn, db_key)
                     if entry is None:
                         return None
+                    miner_ids = [int(i) for i in entry.miner_id.split(",")]
                     return (
                         PieceDHTValue(
                             piece_hash=entry.piece_hash,
                             validator_id=entry.validator_id,
-                            miner_id=entry.miner_id,
+                            miner_id=miner_ids,
                             chunk_idx=entry.chunk_idx,
                             piece_idx=entry.piece_idx,
                             piece_type=entry.piece_type,

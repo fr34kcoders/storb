@@ -39,7 +39,6 @@ class TrackerMessage(BaseModel):
 
 class PieceMessage(BaseModel):
     piece_hash: str
-    miner_id: int
     chunk_idx: int
     piece_idx: int
     piece_type: PieceType
