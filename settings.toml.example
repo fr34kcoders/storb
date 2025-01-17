@@ -1,4 +1,4 @@
-version = "0.2.1"
+version = "0.2.2"
 
 netuid = 0
 external_ip = "0.0.0.0"
