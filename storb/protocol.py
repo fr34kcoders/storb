@@ -68,6 +68,7 @@ class MetadataResponse(BaseModel):
 
 
 class GetMinersBase(BaseModel):
+    filename: str
     infohash: str
     chunk_ids: Optional[list[str]] = Field(default=None)
     chunks_metadata: Optional[list[ChunkDHTValue]] = Field(
@@ -76,11 +77,3 @@ class GetMinersBase(BaseModel):
     pieces_metadata: Optional[list[list[PieceDHTValue]]] = Field(
         default=None
     )  # multi dimensional array of piece metadata. each row corresponds to a chunk
-
-
-class GetMiners(GetMinersBase):
-    def __str__(self) -> str:
-        return f"GetMiners(infohash={self.infohash}, \
-            chunk_ids={self.chunk_ids}, \
-            chunks_metadata={self.chunks_metadata}, \
-            pieces_metadata={self.pieces_metadata})"

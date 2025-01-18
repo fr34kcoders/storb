@@ -199,12 +199,6 @@ class Validator(Neuron):
         )
 
         self.app.add_api_route(
-            "/miners",
-            self.get_miners_for_file,
-            methods=["POST"],
-        )
-
-        self.app.add_api_route(
             "/challenge/verify",
             self.verify_challenge,
             methods=["POST"],
@@ -506,11 +500,8 @@ class Validator(Neuron):
         self.is_running = True
         logger.info("Started")
 
-    async def get_miners_for_file(
-        self, request: protocol.GetMiners = Body(...)
-    ) -> protocol.GetMiners:
-        """Retrieve the list of miners responsible for storing the pieces of a
-        file based on its infohash.
+    async def get_infohash(self, infohash: str) -> protocol.GetMinersBase:
+        """Retrieve all data associated with the provided infohash from the DHT.
 
         This method looks up all piece IDs associated with the provided infohash
         from the DHT. If no pieces are found, an HTTP 404 error is raised.
@@ -518,13 +509,13 @@ class Validator(Neuron):
 
         Parameters
         ----------
-        request: protocol.GetMiners
-            A GetMiners instance containing the infohash to look up piece IDs and miners for.
+        infohash : str
+            The infohash of the file to retrieve the miners for.
 
         Returns
         -------
-        protocol.GetMiners
-            A GetMiners instance populated with the provided infohash, the associated
+        protocol.GetMinersBase
+            A GetMinersBase instance populated with the provided infohash, the associated
             piece IDs, and the IDs of the miners that store those pieces.
 
         Raises
@@ -534,7 +525,6 @@ class Validator(Neuron):
             - 500 if any error occurs while retrieving miner information from the DHT.
         """
 
-        infohash = request.infohash
         tracker_data = await self.dht.get_tracker_entry(infohash)
         if tracker_data is None:
             raise HTTPException(
@@ -626,7 +616,8 @@ class Validator(Neuron):
                     )
             multi_piece_meta.append(pieces_metadata)
 
-        response = protocol.GetMiners(
+        response = protocol.GetMinersBase(
+            filename=tracker_data.filename,
             infohash=infohash,
             chunk_ids=chunk_ids,
             chunks_metadata=chunks_metadatas,
@@ -1515,74 +1506,15 @@ class Validator(Neuron):
 
     async def get_file(self, infohash: str):
         """Get a file"""
-
-        # Get validator ID from tracker DHT given the infohash
-        tracker_dht = await self.dht.get_tracker_entry(infohash)
-        if not tracker_dht:
+        tracker = await self.get_infohash(infohash)
+        if not tracker:
             raise HTTPException(
                 status_code=HTTP_404_NOT_FOUND,
-                detail="No tracker entry found for the given infohash",
+                detail="No miners available for the given file",
             )
-
-        message = TrackerMessage(
-            infohash=tracker_dht.infohash,
-            validator_id=tracker_dht.validator_id,
-            filename=tracker_dht.filename,
-            length=tracker_dht.length,
-            chunk_size=tracker_dht.chunk_size,
-            chunk_count=tracker_dht.chunk_count,
-            chunk_hashes=tracker_dht.chunk_hashes,
-            creation_timestamp=tracker_dht.creation_timestamp,
-        )
-
-        try:
-            signature = tracker_dht.signature
-            logger.debug(f"signature: {signature}")
-            if not verify_message(
-                self.metagraph, message, signature, message.validator_id
-            ):
-                raise HTTPException(
-                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Signature verification failed for tracker entry",
-                )
-        except Exception as e:
-            logger.error(e)
-            raise HTTPException(
-                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Signature verification failed for tracker entry",
-            )
-
-        validator_to_ask = tracker_dht.validator_id
-        validator_hotkey = list(self.metagraph.nodes.keys())[validator_to_ask]
-
-        synapse = protocol.GetMiners(infohash=infohash)
-        payload = Payload(data=synapse)
-
-        try:
-            _, recv_payload = await self.query_miner(
-                miner_hotkey=validator_hotkey,
-                endpoint="/miners",
-                payload=payload,
-            )
-            if not recv_payload:
-                raise HTTPException(
-                    status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="No response from miner",
-                )
-        except Exception as e:
-            logger.error(e)
-            raise HTTPException(
-                status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error querying miner",
-            )
-
-        response = recv_payload.data
-
         # TODO get each group of miners per chunk instead of all at once?
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
-
-        logger.info(f"Got response from validator {validator_to_ask}")
 
         pieces = []
         chunks = []
@@ -1607,8 +1539,8 @@ class Validator(Neuron):
                 )
                 return (list(self.metagraph.nodes.keys())[miner_id], None)
 
-        for idx, _ in enumerate(response.chunk_ids):
-            chunks_metadata: ChunkDHTValue = response.chunks_metadata[idx]
+        for idx, _ in enumerate(tracker.chunk_ids):
+            chunks_metadata: ChunkDHTValue = tracker.chunks_metadata[idx]
             chunk = EncodedChunk(
                 chunk_idx=chunks_metadata.chunk_idx,
                 k=chunks_metadata.k,
@@ -1619,7 +1551,7 @@ class Validator(Neuron):
             )
             chunks.append(chunk)
 
-            chunk_pieces_metadata = response.pieces_metadata[idx]
+            chunk_pieces_metadata = tracker.pieces_metadata[idx]
 
             for piece_idx, piece_id in enumerate(chunks_metadata.piece_hashes):
                 miner_ids = chunk_pieces_metadata[piece_idx].miner_id
@@ -1698,9 +1630,7 @@ class Validator(Neuron):
         def file_generator():
             yield from reconstruct_data_stream(pieces, chunks)
 
-        headers = {
-            "Content-Disposition": f"attachment; filename={tracker_dht.filename}"
-        }
+        headers = {"Content-Disposition": f"attachment; filename={tracker.filename}"}
         return StreamingResponse(
             file_generator(),
             media_type="application/octet-stream",
