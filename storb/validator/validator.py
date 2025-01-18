@@ -75,7 +75,6 @@ logger = get_logger(__name__)
 
 @dataclass
 class PieceTask:
-    miner_uid: int
     piece_idx: int
     piece_hash: str
     data: bytes
@@ -129,6 +128,7 @@ class Validator(Neuron):
 
         self.loop = asyncio.get_event_loop()
         self.piece_queue = queue.Queue()
+        self.piece_miners: dict[str, set[int]] = {}
         self.consumer_threads: list[threading.Thread] = []
         self.start_piece_consumers()
 
@@ -345,7 +345,7 @@ class Validator(Neuron):
                     self.scores = new_moving_average
 
                     self.store_latencies = new_store_latencies
-                    self.retrieve_latencies = new_ret_latency_scores
+                    self.retrieve_latencies = new_ret_latencies
                     self.store_latency_scores = new_store_latency_scores
                     self.ret_latency_scores = new_ret_latency_scores
                     self.final_latency_scores = new_final_latency_scores
@@ -594,7 +594,6 @@ class Validator(Neuron):
                         # create message object excluding the signature
                         message = PieceMessage(
                             piece_hash=piece_id,
-                            miner_id=piece.miner_id,
                             chunk_idx=piece.chunk_idx,
                             piece_idx=piece.piece_idx,
                             piece_type=piece.piece_type,
@@ -734,14 +733,34 @@ class Validator(Neuron):
         # obtain all miner stats from the validator database
         async with db.get_db_connection(self.db_dir) as conn:
             miner_stats = await db.get_all_miner_stats(conn)
-            challenge_piece = await db.get_random_piece(conn, self.uid)
+            try:
+                challenge_piece = await db.get_random_piece(conn, self.uid)
+            except Exception as e:
+                logger.error(f"Failed to get random piece: {e}")
+                return
+
+            if isinstance(challenge_piece.miner_id, set):
+                random_miner = np.random.choice(list(challenge_piece.miner_id))
+                challenge_piece.miner_id = random_miner
+            else:
+                logger.error(
+                    f"Miner ID is not a list: {challenge_piece.miner_id} it is {type(challenge_piece.miner_id)}"
+                )
+                # skip challenge
+                logger.warning(
+                    f"Skipping challenge for piece {challenge_piece.piece_hash}, no valid miners found"
+                )
+                return
 
         if challenge_piece is not None:
-            await self.challenge_miner(
-                challenge_piece.miner_id,
-                challenge_piece.piece_hash,
-                challenge_piece.tag,
-            )
+            try:
+                await self.challenge_miner(
+                    challenge_piece.miner_id,
+                    challenge_piece.piece_hash,
+                    challenge_piece.tag,
+                )
+            except Exception as e:
+                logger.error(f"Failed to challenge miner: {e}")
 
         # calculate the score(s) for uids given their stats
         response_rate_uids, response_rate_scores = get_response_rate_scores(
@@ -855,7 +874,6 @@ class Validator(Neuron):
             # logger.warning(f"Entry for node ID {node.node_id} not found")
             return node.node_id, None
         _, symmetric_key_uuid = symmetric_key
-
         try:
             if method == "GET":
                 logger.debug(f"GET {miner_hotkey}")
@@ -874,16 +892,20 @@ class Validator(Neuron):
             if method == "POST":
                 logger.debug(f"POST {miner_hotkey}")
                 start_time = time.perf_counter()
-                received = await make_non_streamed_post(
-                    httpx_client=self.httpx_client,
-                    server_address=server_addr,
-                    validator_ss58_address=self.keypair.ss58_address,
-                    miner_ss58_address=miner_hotkey,
-                    keypair=self.keypair,
-                    endpoint=endpoint,
-                    payload=payload,
-                    timeout=QUERY_TIMEOUT,
-                )
+                try:
+                    received = await make_non_streamed_post(
+                        httpx_client=self.httpx_client,
+                        server_address=server_addr,
+                        validator_ss58_address=self.keypair.ss58_address,
+                        miner_ss58_address=miner_hotkey,
+                        keypair=self.keypair,
+                        endpoint=endpoint,
+                        payload=payload,
+                        timeout=QUERY_TIMEOUT,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to query miner: {e}")
+                    return node.node_id, None
                 end_time = time.perf_counter()
                 time_elapsed = end_time - start_time
                 # TODO: is there a better way to do all this?
@@ -939,6 +961,10 @@ class Validator(Neuron):
         while True:
             try:
                 piece_task = self.piece_queue.get()
+                if piece_task is None:
+                    logger.debug("Received None from piece queue, going back to sleep")
+                    self.piece_queue.task_done()
+                    break
                 try:
                     tag = self.process_tag(piece_task.data)
                 except Exception as e:
@@ -948,7 +974,6 @@ class Validator(Neuron):
                 try:
                     message = PieceMessage(
                         piece_hash=piece_task.piece_hash,
-                        miner_id=piece_task.miner_uid,
                         chunk_idx=piece_task.chunk_idx,
                         piece_idx=piece_task.piece_idx,
                         piece_type=piece_task.piece_type,
@@ -960,13 +985,15 @@ class Validator(Neuron):
                     logger.error(f"Error signing message: {e}")
                     self.piece_queue.task_done()
                     continue
+                miners = self.piece_miners.get(piece_task.piece_hash)
+                logger.debug(f"Piece: {piece_task.piece_hash} | Miners: {miners}")
 
                 self.dht.store_piece_entry(
                     piece_hash=piece_task.piece_hash,
                     value=PieceDHTValue(
                         piece_hash=piece_task.piece_hash,
                         validator_id=self.uid,
-                        miner_id=piece_task.miner_uid,
+                        miner_id=miners,
                         chunk_idx=piece_task.chunk_idx,
                         piece_idx=piece_task.piece_idx,
                         piece_type=piece_task.piece_type,
@@ -1037,9 +1064,9 @@ class Validator(Neuron):
 
                     # Verify piece hash
                     true_hash = piece_hashes[real_piece_idx]
+                    self.piece_miners.setdefault(true_hash, []).append(uid)
                     self.piece_queue.put(
                         PieceTask(
-                            miner_uid=uid,
                             piece_idx=real_piece_idx,
                             piece_hash=true_hash,
                             data=pieces[real_piece_idx].data,
@@ -1557,13 +1584,30 @@ class Validator(Neuron):
 
         logger.info(f"Got response from validator {validator_to_ask}")
 
-        piece_ids = []
         pieces = []
         chunks = []
-        responses = []
+        responses_piece_ids = []
+        piece_ids_match = True
+        latencies = np.full(len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32)
 
         # TODO: check if the lengths of the chunk ids and chunks_metadata are the same
-        for idx, chunk_id in enumerate(response.chunk_ids):
+        async def get_piece(piece_id, miner_id):
+            synapse = protocol.Retrieve(piece_id=piece_id)
+            payload = Payload(data=synapse)
+            try:
+                response = await self.query_miner(
+                    miner_hotkey=list(self.metagraph.nodes.keys())[miner_id],
+                    endpoint="/retrieve",
+                    payload=payload,
+                )
+                return response
+            except Exception as e:
+                logger.error(
+                    f"Error querying miner {miner_id} for piece {piece_id}: {e}"
+                )
+                return (list(self.metagraph.nodes.keys())[miner_id], None)
+
+        for idx, _ in enumerate(response.chunk_ids):
             chunks_metadata: ChunkDHTValue = response.chunks_metadata[idx]
             chunk = EncodedChunk(
                 chunk_idx=chunks_metadata.chunk_idx,
@@ -1577,99 +1621,69 @@ class Validator(Neuron):
 
             chunk_pieces_metadata = response.pieces_metadata[idx]
 
-            to_query = []
             for piece_idx, piece_id in enumerate(chunks_metadata.piece_hashes):
-                piece_ids.append(piece_id)
-                # TODO: many of these can be moved around and placed into their own functions
-
-                # get piece(s) from miner(s)
-                synapse = protocol.Retrieve(piece_id=piece_id)
-                payload = Payload(data=synapse)
-                to_query.append(
-                    asyncio.create_task(
-                        self.query_miner(
-                            miner_hotkey=list(self.metagraph.nodes.keys())[
-                                chunk_pieces_metadata[piece_idx].miner_id
-                            ],
-                            endpoint="/retrieve",
-                            payload=payload,
-                        )
+                miner_ids = chunk_pieces_metadata[piece_idx].miner_id
+                if not miner_ids:
+                    logger.error(
+                        f"No miners available for piece {piece_id} in chunk {idx}"
                     )
-                )
+                    piece_ids_match = False
+                    continue
+                tasks = [
+                    asyncio.create_task(get_piece(piece_id, miner_id))
+                    for miner_id in miner_ids
+                ]
 
-            chunk_responses: list[tuple[int, protocol.Retrieve]] = await asyncio.gather(
-                *to_query
-            )
-            responses += chunk_responses
+                for done in asyncio.as_completed(tasks):
+                    miner_uid, recv_payload = await done
+                    miner_stats[miner_uid]["retrieval_attempts"] += 1
 
-        # TODO: optimize the rest of this
-        # check integrity of file if found
+                    if not recv_payload or not recv_payload.file:
+                        logger.warning(
+                            f"Miner {miner_uid} did not return piece {piece_id}"
+                        )
+                        continue
+                    piece_data = recv_payload.file
+                    actual_piece_id = piece_hash(piece_data)
 
-        response_piece_ids = []
-        piece_ids_match = True
+                    if actual_piece_id != piece_id:
+                        logger.warning(
+                            f"Piece id mismatch: {actual_piece_id} != {piece_id}. Punishing miner {miner_uid}"
+                        )
+                        latencies[miner_uid] = QUERY_TIMEOUT
+                        continue
 
-        latencies = np.full(len(self.metagraph.nodes), QUERY_TIMEOUT, dtype=np.float32)
+                    miner_stats[miner_uid]["retrieval_successes"] += 1
+                    miner_stats[miner_uid]["total_successes"] += 1
+                    latencies[miner_uid] = recv_payload.time_elapsed / len(piece_data)
 
-        for idx, uid_and_response in enumerate(responses):
-            miner_uid, recv_payload = uid_and_response
-            miner_stats[miner_uid]["retrieval_attempts"] += 1
+                    piece = Piece(
+                        chunk_idx=chunk.chunk_idx,
+                        piece_idx=piece_idx,
+                        piece_type=chunk_pieces_metadata[piece_idx].piece_type,
+                        data=piece_data,
+                    )
+                    pieces.append(piece)
+                    responses_piece_ids.append(piece_id)
 
-            if not recv_payload:
-                continue
-            elif not recv_payload.file:
-                continue
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    break
 
-            piece_data = recv_payload.file
-
-            piece_id = piece_hash(piece_data)
-            # TODO: do we want to go through all the pieces/uids before returning the error?
-            # perhaps we can return an error response, and after we can continue scoring the
-            # miners in the background?
-
-            piece_meta = None
-            try:
-                # TODO: this is probably very inefficient because we got
-                # pieces_metadata in the response from the validator
-                # cba rn but should probs get around to addressing this later
-                piece_meta = await self.dht.get_piece_entry(piece_id)
-            except Exception as e:
-                logger.error(e)
-                piece_meta = None
-
-            if piece_id != piece_ids[idx]:
-                piece_ids_match = False
-                latencies[miner_uid] = QUERY_TIMEOUT
-            else:
-                miner_stats[miner_uid]["retrieval_successes"] += 1
-                miner_stats[miner_uid]["total_successes"] += 1
-                latencies[miner_uid] = recv_payload.time_elapsed / len(piece_data)
-
-            piece = Piece(
-                chunk_idx=piece_meta.chunk_idx,
-                piece_idx=piece_meta.piece_idx,
-                piece_type=piece_meta.piece_type,
-                data=piece_data,
-            )
-
-            pieces.append(piece)
-            response_piece_ids.append(piece_id)
-
-        logger.debug(f"tracker_dht: {tracker_dht}")
-
-        # update miner(s) stats in validator db
-        async with db.get_db_connection(self.db_dir) as conn:
-            for miner_uid, miner_stat in miner_stats.items():
-                await db.update_stats(
-                    conn,
-                    miner_uid=miner_uid,
-                    stats=miner_stat,
-                )
+            if not piece_ids_match:
+                logger.error("Piece ids don't not match!")
+                break
 
         if not piece_ids_match:
             raise HTTPException(
                 status_code=HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Piece ids don't not match!",
+                detail="Piece integrity verification failed!",
             )
+
+        async with db.get_db_connection(self.db_dir) as conn:
+            for miner_uid, miner_stat in miner_stats.items():
+                await db.update_stats(conn, miner_uid=miner_uid, stats=miner_stat)
 
         # we use the ema here so that the latency score changes aren't so sudden
         alpha: float = self.settings.neuron.response_time_alpha

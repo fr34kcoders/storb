@@ -7,7 +7,6 @@ from pathlib import Path
 from kademlia.network import Server
 
 from storb.constants import (
-    DHT_QUERY_TIMEOUT,
     DHT_STARTUP_AND_SHUTDOWN_TIMEOUT,
 )
 from storb.dht.chunk_dht import ChunkDHTValue
@@ -241,7 +240,7 @@ class DHT:
                 self.server.set(key, value),
                 self.loop,
             )
-            res = future.result(timeout=DHT_QUERY_TIMEOUT)
+            res = future.result()
             if not res:
                 raise RuntimeError(f"Failed to store tracker entry for {infohash}")
             logger.info(f"Successfully stored tracker entry for {infohash}")
@@ -273,7 +272,7 @@ class DHT:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
-            value: bytes = future.result(timeout=DHT_QUERY_TIMEOUT)
+            value: bytes = future.result()
             if not value:
                 return None
             logger.info(f"Successfully retrieved tracker entry for {infohash}")
@@ -315,7 +314,7 @@ class DHT:
                 self.server.set(key, value),
                 self.loop,
             )
-            res = future.result(timeout=DHT_QUERY_TIMEOUT)
+            res = future.result()
             if not res:
                 raise RuntimeError(f"Failed to store chunk entry for {chunk_hash}")
             logger.info(f"Successfully stored chunk entry for {chunk_hash}")
@@ -347,7 +346,7 @@ class DHT:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
-            value: bytes = future.result(timeout=DHT_QUERY_TIMEOUT)
+            value: bytes = future.result()
             if not value:
                 return None
             logger.info(f"Successfully retrieved chunk entry for {chunk_hash}")
@@ -389,7 +388,7 @@ class DHT:
                 self.server.set(key, value),
                 self.loop,
             )
-            res = future.result(timeout=DHT_QUERY_TIMEOUT)
+            res = future.result()
             if not res:
                 raise RuntimeError(f"Failed to store piece entry for {piece_hash}")
             logger.info(f"Successfully stored piece entry for {piece_hash}")
@@ -422,7 +421,7 @@ class DHT:
             if self.server.protocol.router is None:
                 raise RuntimeError("Event loop is not set yet!")
             future = asyncio.run_coroutine_threadsafe(self.server.get(key), self.loop)
-            value: bytes = future.result(timeout=DHT_QUERY_TIMEOUT)
+            value: bytes = future.result()
             if not value:
                 return None
             logger.info(f"Successfully retrieved piece entry for {piece_hash}")

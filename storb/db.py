@@ -317,10 +317,11 @@ async def get_random_piece(
     async with conn.execute(query, (validator_id,)) as cursor:
         row = await cursor.fetchone()
         if row:
+            miner_ids = [int(i) for i in row[2].split(",")]
             return PieceDHTValue(
                 piece_hash=row[0],
                 validator_id=row[1],
-                miner_id=row[2],
+                miner_id=miner_ids,
                 chunk_idx=row[3],
                 piece_idx=row[4],
                 piece_type=row[5],

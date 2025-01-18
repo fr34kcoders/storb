@@ -31,7 +31,7 @@ CREATE TABLE chunk (
 CREATE TABLE piece (
     piece_hash TEXT PRIMARY KEY,                     -- Piece ID
     validator_id INTEGER,                            -- ID of the validator
-    miner_id INTEGER,                                -- ID of the miner
+    miner_id TEXT,                                   -- IDs of the miner in a JSON Array
     chunk_idx INTEGER,                               -- Index of the chunk in the file
     piece_idx INTEGER,                               -- Index of the piece in the chunk
     piece_type INTEGER CHECK (piece_type IN (0, 1)), -- Type of the piece (0: data, 1: parity)
