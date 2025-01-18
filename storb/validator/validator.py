@@ -14,7 +14,7 @@ from typing import AsyncGenerator, Literal, override
 import httpx
 import numpy as np
 import uvicorn
-from fastapi import Body, File, HTTPException, UploadFile
+from fastapi import File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from fiber.chain import interface
 from fiber.chain.weights import set_node_weights
