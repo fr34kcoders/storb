@@ -1,6 +1,6 @@
 """Storb: An object storage subnet on the Bittensor network"""
 
-__version__ = "0.2.2"
+__version__ = "0.2.1"
 
 
 def get_spec_version(version: str) -> int:
